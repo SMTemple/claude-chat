@@ -1,3 +1,87 @@
+// === Setup Wizard ===
+(async () => {
+  const setup = await window.api.checkSetup();
+  if (setup.setupComplete) return; // Already set up
+
+  const wizard = document.getElementById('setup-wizard');
+  const appEl = document.getElementById('app');
+  wizard.classList.remove('hidden');
+  appEl.style.display = 'none';
+
+  const totalSteps = 4;
+  let currentStep = 1;
+  const wizardData = { cwd: setup.cwd, model: 'opus' };
+
+  // Build dots
+  const dotsEl = document.getElementById('wizard-dots');
+  for (let i = 1; i <= totalSteps; i++) {
+    const dot = document.createElement('div');
+    dot.className = 'wizard-dot' + (i === 1 ? ' active' : '');
+    dot.dataset.step = i;
+    dotsEl.appendChild(dot);
+  }
+
+  function showStep(n) {
+    document.querySelectorAll('.wizard-step').forEach(s => s.classList.add('hidden'));
+    document.querySelector(`.wizard-step[data-step="${n}"]`).classList.remove('hidden');
+    dotsEl.querySelectorAll('.wizard-dot').forEach(d => d.classList.toggle('active', +d.dataset.step === n));
+    document.getElementById('wizard-back').classList.toggle('hidden', n === 1);
+    document.getElementById('wizard-next').textContent = n === totalSteps ? 'Get Started' : 'Next';
+  }
+
+  // Step 1: Prerequisites
+  const cliCheck = document.getElementById('wizard-cli-check');
+  const apiCheck = document.getElementById('wizard-api-check');
+  const prereqHint = document.getElementById('wizard-prereq-hint');
+
+  cliCheck.classList.add(setup.claudeInstalled ? 'pass' : 'fail');
+  // API key — we can't check directly, but if CLI is installed it likely has one
+  apiCheck.classList.add(setup.claudeInstalled ? 'pass' : 'warn');
+
+  if (!setup.claudeInstalled) {
+    prereqHint.textContent = 'Claude Code CLI not found. Install it with: npm install -g @anthropic-ai/claude-code';
+  }
+
+  // Step 2: Working Directory
+  const wizardCwd = document.getElementById('wizard-cwd');
+  wizardCwd.textContent = wizardData.cwd;
+  wizardCwd.title = wizardData.cwd;
+
+  document.getElementById('wizard-pick-dir').addEventListener('click', async () => {
+    const dir = await window.api.pickDirectory();
+    if (dir) {
+      wizardData.cwd = dir;
+      wizardCwd.textContent = dir;
+      wizardCwd.title = dir;
+    }
+  });
+
+  // Navigation
+  document.getElementById('wizard-next').addEventListener('click', async () => {
+    if (currentStep === 3) {
+      // Capture model selection
+      const selected = document.querySelector('input[name="wizard-model"]:checked');
+      if (selected) wizardData.model = selected.value;
+    }
+    if (currentStep === totalSteps) {
+      // Complete setup
+      await window.api.completeSetup(wizardData);
+      wizard.classList.add('hidden');
+      appEl.style.display = '';
+      return;
+    }
+    currentStep++;
+    showStep(currentStep);
+  });
+
+  document.getElementById('wizard-back').addEventListener('click', () => {
+    if (currentStep > 1) {
+      currentStep--;
+      showStep(currentStep);
+    }
+  });
+})();
+
 // === Toast ===
 // === Debug error log ===
 const debugErrors = [];

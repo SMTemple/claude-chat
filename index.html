@@ -7,6 +7,90 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+  <!-- Setup Wizard -->
+  <div id="setup-wizard" class="hidden">
+    <div class="wizard-container">
+      <div class="wizard-header">
+        <div class="wizard-icon">C</div>
+        <h1>Welcome to Claude Chat</h1>
+        <p class="wizard-subtitle">Let's get you set up</p>
+      </div>
+
+      <div id="wizard-steps">
+        <!-- Step 1: Prerequisites -->
+        <div class="wizard-step" data-step="1">
+          <h2>Prerequisites Check</h2>
+          <div class="wizard-check" id="wizard-cli-check">
+            <span class="wizard-check-icon"></span>
+            <span class="wizard-check-text">Claude Code CLI installed</span>
+          </div>
+          <div class="wizard-check" id="wizard-api-check">
+            <span class="wizard-check-icon"></span>
+            <span class="wizard-check-text">ANTHROPIC_API_KEY set</span>
+          </div>
+          <p class="wizard-hint" id="wizard-prereq-hint"></p>
+        </div>
+
+        <!-- Step 2: Working Directory -->
+        <div class="wizard-step hidden" data-step="2">
+          <h2>Default Working Directory</h2>
+          <p class="wizard-desc">Where should Claude operate? This is the directory Claude will read/write files in.</p>
+          <div class="wizard-dir-row">
+            <span id="wizard-cwd" class="wizard-dir-path">Not set</span>
+            <button id="wizard-pick-dir" class="wizard-btn-secondary">Browse</button>
+          </div>
+        </div>
+
+        <!-- Step 3: Model -->
+        <div class="wizard-step hidden" data-step="3">
+          <h2>Default Model</h2>
+          <p class="wizard-desc">Choose your preferred Claude model.</p>
+          <div class="wizard-model-options">
+            <label class="wizard-model-option">
+              <input type="radio" name="wizard-model" value="opus" checked>
+              <div class="wizard-model-card">
+                <strong>Opus</strong>
+                <span>Most capable, best for complex tasks. Slower.</span>
+              </div>
+            </label>
+            <label class="wizard-model-option">
+              <input type="radio" name="wizard-model" value="sonnet">
+              <div class="wizard-model-card">
+                <strong>Sonnet</strong>
+                <span>Great balance of speed and capability.</span>
+              </div>
+            </label>
+            <label class="wizard-model-option">
+              <input type="radio" name="wizard-model" value="haiku">
+              <div class="wizard-model-card">
+                <strong>Haiku</strong>
+                <span>Fastest responses, good for simple tasks.</span>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <!-- Step 4: Ready -->
+        <div class="wizard-step hidden" data-step="4">
+          <h2>You're all set!</h2>
+          <p class="wizard-desc">Here are some tips to get started:</p>
+          <ul class="wizard-tips">
+            <li><kbd>Ctrl+V</kbd> to paste screenshots</li>
+            <li>Drag & drop any files onto the chat</li>
+            <li>Type <code>/</code> to see all available commands</li>
+            <li>Use <code>/config</code> to change settings anytime</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="wizard-nav">
+        <button id="wizard-back" class="wizard-btn-secondary hidden">Back</button>
+        <div class="wizard-dots" id="wizard-dots"></div>
+        <button id="wizard-next" class="wizard-btn-primary">Next</button>
+      </div>
+    </div>
+  </div>
+
   <div id="app">
     <!-- Sidebar -->
     <aside id="sidebar">

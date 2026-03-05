@@ -21,7 +21,27 @@ try {
 } catch (e) {}
 let currentCwd = process.cwd();
 
+const APP_CONFIG_FILE = path.join(os.homedir(), '.claude', 'claude-chat-config.json');
 const PROMPTS_FILE = path.join(os.homedir(), '.claude', 'claude-chat-prompts.json');
+
+function loadAppConfig() {
+  try {
+    if (fs.existsSync(APP_CONFIG_FILE)) return JSON.parse(fs.readFileSync(APP_CONFIG_FILE, 'utf-8'));
+  } catch (e) {}
+  return {};
+}
+
+function saveAppConfig(config) {
+  const dir = path.dirname(APP_CONFIG_FILE);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(APP_CONFIG_FILE, JSON.stringify(config, null, 2), 'utf-8');
+}
+
+// Load saved CWD from app config if available
+const appConfig = loadAppConfig();
+if (appConfig.cwd && fs.existsSync(appConfig.cwd)) {
+  currentCwd = appConfig.cwd;
+}
 
 function loadPrompts() {
   try {
@@ -142,6 +162,10 @@ ipcMain.handle('set-cwd', async () => {
   });
   if (result.filePaths && result.filePaths[0]) {
     currentCwd = result.filePaths[0];
+    // Persist to app config
+    const config = loadAppConfig();
+    config.cwd = currentCwd;
+    saveAppConfig(config);
     return currentCwd;
   }
   return null;
@@ -370,6 +394,46 @@ ipcMain.handle('set-claude-config', (_event, { key, value }) => {
     console.error('[Config] Write error:', e);
     return false;
   }
+});
+
+// === Setup Wizard ===
+ipcMain.handle('check-setup', () => {
+  const config = loadAppConfig();
+  const claudeInstalled = (() => {
+    try {
+      const { execSync } = require('child_process');
+      execSync('claude --version', { stdio: 'pipe', env: { ...process.env, CLAUDECODE: undefined } });
+      return true;
+    } catch (e) { return false; }
+  })();
+  return {
+    setupComplete: !!config.setupComplete,
+    claudeInstalled,
+    cwd: config.cwd || currentCwd,
+    model: currentModel,
+  };
+});
+
+ipcMain.handle('complete-setup', (_event, setupData) => {
+  const config = loadAppConfig();
+  config.setupComplete = true;
+  if (setupData.cwd) {
+    config.cwd = setupData.cwd;
+    currentCwd = setupData.cwd;
+  }
+  if (setupData.model) {
+    currentModel = setupData.model;
+  }
+  saveAppConfig(config);
+  return true;
+});
+
+ipcMain.handle('pick-directory', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openDirectory'],
+    defaultPath: currentCwd,
+  });
+  return result.filePaths?.[0] || null;
 });
 
 // === File Explorer ===

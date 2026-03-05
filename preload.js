@@ -43,6 +43,11 @@ contextBridge.exposeInMainWorld('api', {
   getClaudeConfig: () => ipcRenderer.invoke('get-claude-config'),
   setClaudeConfig: (key, value) => ipcRenderer.invoke('set-claude-config', { key, value }),
 
+  // Setup wizard
+  checkSetup: () => ipcRenderer.invoke('check-setup'),
+  completeSetup: (data) => ipcRenderer.invoke('complete-setup', data),
+  pickDirectory: () => ipcRenderer.invoke('pick-directory'),
+
   onClaudeEvent: (cb) => ipcRenderer.on('claude-event', (_e, data) => cb(data)),
   onClaudeDone: (cb) => ipcRenderer.on('claude-done', (_e, data) => cb(data)),
   onClaudeError: (cb) => ipcRenderer.on('claude-error', (_e, msg) => cb(msg)),
