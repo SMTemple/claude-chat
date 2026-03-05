@@ -120,7 +120,7 @@
         <button id="config-btn" class="sidebar-action">Settings</button>
       </div>
 
-      <div class="sidebar-section">
+      <div class="sidebar-section" id="voice-section" style="display:none">
         <div class="sidebar-label-row">
           <label class="sidebar-label">Voice Readback</label>
           <label class="toggle-switch">
@@ -150,6 +150,10 @@
 
     <!-- Main terminal area -->
     <main id="chat-area">
+      <div id="terminal-loading">
+        <div class="loading-spinner"></div>
+        <div class="loading-text">Starting Claude Code...</div>
+      </div>
       <div id="terminal-container"></div>
 
       <!-- Image/file preview strip -->
@@ -204,7 +208,7 @@
             <button id="config-cwd-btn" class="modal-btn">Change</button>
           </div>
         </div>
-        <div class="config-section">
+        <div class="config-section" style="display:none">
           <label class="config-label">Voice Readback</label>
           <div class="config-row">
             <label class="toggle-switch">
@@ -254,6 +258,25 @@
       <div class="modal-actions">
         <button id="prompt-cancel" class="modal-btn">Cancel</button>
         <button id="prompt-save" class="modal-btn primary">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Content preview modal -->
+  <div id="preview-modal" class="modal hidden">
+    <div class="modal-content preview-panel">
+      <div class="preview-header">
+        <h3 id="preview-title">Content Preview</h3>
+        <div class="preview-tabs">
+          <button class="preview-tab active" data-view="rendered">Rendered</button>
+          <button class="preview-tab" data-view="source">Source</button>
+        </div>
+      </div>
+      <div id="preview-rendered" class="preview-body"></div>
+      <div id="preview-source" class="preview-body" style="display:none"><pre><code id="preview-source-code"></code></pre></div>
+      <div class="modal-actions">
+        <button id="preview-copy" class="modal-btn primary">Copy Source</button>
+        <button id="preview-close" class="modal-btn">Close</button>
       </div>
     </div>
   </div>

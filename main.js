@@ -89,6 +89,12 @@ function createWindow() {
 
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (input.control && input.key === 'r') {
+      // Kill PTY silently before reload — suppress exit event
+      if (ptyProcess) {
+        const p = ptyProcess;
+        ptyProcess = null; // null before kill so onExit guard skips the send
+        try { p.kill(); } catch (e) {}
+      }
       mainWindow.webContents.reloadIgnoringCache();
       event.preventDefault();
     }
@@ -129,13 +135,19 @@ function spawnClaude(cols, rows) {
   // Force color and terminal support
   env.FORCE_COLOR = '1';
   env.TERM = 'xterm-256color';
+  // Suppress false-positive PATH warning (known Claude Code bug on Windows)
+  env.DISABLE_INSTALLATION_CHECKS = '1';
 
   // Resolve claude executable path
   let claudeExe = 'claude';
+  const localBin = path.join(os.homedir(), '.local', 'bin');
   if (process.platform === 'win32') {
-    // Try common locations if not in PATH
-    const localBin = path.join(os.homedir(), '.local', 'bin', 'claude.exe');
-    if (fs.existsSync(localBin)) claudeExe = localBin;
+    const localExe = path.join(localBin, 'claude.exe');
+    if (fs.existsSync(localExe)) claudeExe = localExe;
+    // Ensure localBin is in PATH so Claude Code doesn't warn
+    if (env.PATH && !env.PATH.includes(localBin)) {
+      env.PATH = localBin + ';' + env.PATH;
+    }
   }
 
   ptyProcess = pty.spawn(claudeExe, ['--model', currentModel], {
@@ -152,10 +164,14 @@ function spawnClaude(cols, rows) {
     }
   });
 
+  const thisProcess = ptyProcess;
   ptyProcess.onExit(({ exitCode }) => {
-    ptyProcess = null;
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('pty-exit', exitCode);
+    // Only send exit event if this is still the active PTY (not a silent reload kill)
+    if (ptyProcess === thisProcess) {
+      ptyProcess = null;
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('pty-exit', exitCode);
+      }
     }
   });
 }
@@ -409,40 +425,76 @@ ipcMain.handle('read-dir', async (_event, dirPath) => {
   }
 });
 
-// === Edge Neural TTS ===
-const { MsEdgeTTS, OUTPUT_FORMAT } = require('msedge-tts');
-let ttsInstance = null;
+// === Edge Neural TTS (via Python edge-tts + uv) ===
+const { execSync, spawn: cpSpawn } = require('child_process');
+let ttsChild = null;
+
+const UV_BIN = path.join(os.homedir(), '.local', 'bin', 'uv.exe');
+const uvCmd = fs.existsSync(UV_BIN) ? UV_BIN : 'uv';
+
+// Cache voices so subsequent calls are instant
+let cachedVoices = null;
 
 ipcMain.handle('tts-get-voices', async () => {
+  if (cachedVoices) return cachedVoices;
   try {
-    const tts = new MsEdgeTTS();
-    const voices = await tts.getVoices();
-    return voices
-      .filter(v => v.Locale.startsWith('en-'))
-      .map(v => ({ name: v.ShortName, friendly: v.FriendlyName, locale: v.Locale, gender: v.Gender }));
+    const { execFile } = require('child_process');
+    const raw = await new Promise((resolve, reject) => {
+      execFile(uvCmd, ['run', '--with', 'edge-tts', 'edge-tts', '--list-voices'], { encoding: 'utf-8', timeout: 30000 }, (err, stdout) => {
+        if (err) reject(err); else resolve(stdout);
+      });
+    });
+    const lines = raw.trim().split('\n').slice(2);
+    cachedVoices = lines.filter(l => l.match(/^en-/)).map(line => {
+      const parts = line.split(/\s{2,}/);
+      const name = parts[0]?.trim();
+      const gender = parts[1]?.trim() || 'Female';
+      const locale = name?.split('-').slice(0, 2).join('-') || 'en-US';
+      return { name, friendly: name.replace('Neural', '').replace(/-/g, ' '), locale, gender };
+    });
+    console.log('[TTS-main] found', cachedVoices.length, 'English voices');
+    return cachedVoices;
   } catch (e) {
+    console.error('[TTS-main] getVoices error:', e.message);
     return [];
   }
 });
 
 ipcMain.handle('tts-speak', async (_event, { text, voice }) => {
   try {
-    if (ttsInstance) { try { ttsInstance.close(); } catch (e) {} }
-    ttsInstance = new MsEdgeTTS();
-    await ttsInstance.setMetadata(voice || 'en-AU-NatashaNeural', OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
-    const outDir = path.join(TEMP_DIR, `tts_${Date.now()}`);
-    if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
-    const result = await ttsInstance.toFile(outDir, text);
-    const filePath = result.audioFilePath || path.join(outDir, 'audio.mp3');
-    if (!fs.existsSync(filePath) || fs.statSync(filePath).size === 0) return { error: 'Audio file not created' };
-    return filePath;
+    if (ttsChild) { try { ttsChild.kill(); } catch (e) {} ttsChild = null; }
+    const voiceName = voice || 'en-AU-NatashaNeural';
+    const outFile = path.join(TEMP_DIR, `tts_${Date.now()}.mp3`);
+    // Write text to temp file to avoid shell escaping issues with special chars
+    const textFile = path.join(TEMP_DIR, `tts_input_${Date.now()}.txt`);
+    fs.writeFileSync(textFile, text, 'utf-8');
+    const args = ['run', '--with', 'edge-tts', 'edge-tts', '--voice', voiceName, '--file', textFile, '--rate=+25%', '--write-media', outFile];
+    console.log('[TTS-main] speak:', voiceName, 'text length:', text.length);
+    ttsChild = cpSpawn(uvCmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stderr = '';
+    ttsChild.stderr.on('data', d => { stderr += d.toString(); });
+    return new Promise((resolve) => {
+      ttsChild.on('exit', (code) => {
+        console.log('[TTS-main] exit code:', code, 'stderr:', stderr.slice(0, 200));
+        ttsChild = null;
+        try { fs.unlinkSync(textFile); } catch (e) {} // clean up temp text file
+        if (fs.existsSync(outFile) && fs.statSync(outFile).size > 0) {
+          console.log('[TTS-main] file created:', outFile, 'size:', fs.statSync(outFile).size);
+          resolve(outFile);
+        } else {
+          console.log('[TTS-main] file not created or empty');
+          resolve({ error: 'Audio file not created' });
+        }
+      });
+    });
   } catch (e) {
+    console.error('[TTS-main] speak error:', e.message);
     return { error: e.message };
   }
 });
 
 ipcMain.handle('tts-stop', () => {
-  if (ttsInstance) { try { ttsInstance.close(); } catch (e) {} ttsInstance = null; }
+  if (ttsChild) { try { ttsChild.kill(); } catch (e) {} ttsChild = null; }
   return true;
 });
 

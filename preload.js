@@ -1,6 +1,11 @@
 const { ipcRenderer } = require('electron');
 const { webUtils } = require('electron');
 
+// Clean up stale listeners from previous page loads (Ctrl+R reload)
+ipcRenderer.removeAllListeners('pty-output');
+ipcRenderer.removeAllListeners('pty-exit');
+ipcRenderer.removeAllListeners('init-state');
+
 window.api = {
   // PTY
   startClaude: (opts) => ipcRenderer.invoke('start-claude', opts),

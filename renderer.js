@@ -170,14 +170,147 @@ function initTerminal() {
   term.open(container);
   fitAddon.fit();
 
+  // Copy/paste support for terminal
+  term.attachCustomKeyEventHandler((e) => {
+    // Ctrl+Shift+C → copy selection
+    if (e.ctrlKey && e.shiftKey && e.key === 'C' && e.type === 'keydown') {
+      const sel = term.getSelection();
+      if (sel) navigator.clipboard.writeText(sel);
+      return false;
+    }
+    // Ctrl+Shift+V → paste from clipboard
+    if (e.ctrlKey && e.shiftKey && e.key === 'V' && e.type === 'keydown') {
+      navigator.clipboard.readText().then(text => {
+        if (text) window.api.ptyInput(text);
+      });
+      return false;
+    }
+    // Ctrl+C with selection → copy (without selection, let it send SIGINT)
+    if (e.ctrlKey && !e.shiftKey && e.key === 'c' && e.type === 'keydown') {
+      const sel = term.getSelection();
+      if (sel) {
+        navigator.clipboard.writeText(sel);
+        term.clearSelection();
+        return false;
+      }
+    }
+    return true;
+  });
+
+  // Right-click → copy selection
+  container.addEventListener('contextmenu', (e) => {
+    const sel = term.getSelection();
+    if (sel) {
+      e.preventDefault();
+      navigator.clipboard.writeText(sel);
+      showToast('Copied to clipboard');
+    }
+  });
+
   // Terminal input → PTY
   term.onData((data) => {
     window.api.ptyInput(data);
   });
 
-  // PTY output → terminal
+  // PTY output → terminal + voice readback
+  let responseBuffer = '';
+  let isResponding = false;
+  let responseTimeout = null;
+
+  function stripAnsi(str) {
+    return str.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '');
+  }
+
+  function cleanResponseText(raw) {
+    return stripAnsi(raw).trim()
+      .split('\n').filter(l => {
+        const t = l.trim();
+        if (!t) return false;
+        if (t.match(/^[❯>]\s*$/)) return false;
+        if (t.match(/accept edits/)) return false;
+        if (t.match(/\d+\s*tokens/)) return false;
+        if (t.match(/current:|latest:/)) return false;
+        if (t.match(/shift\+tab/i)) return false;
+        return true;
+      })
+      .join('\n')
+      .replace(/^[●⏺]\s*/, '')
+      .trim();
+  }
+
+  function detectContent(text) {
+    // Detect HTML
+    if (text.match(/<\s*(html|div|table|form|section|article|head|body|style|script|ul|ol|nav|header|footer|main|p|h[1-6]|span|a\s|img\s|button|input|!DOCTYPE)/i)) {
+      return 'html';
+    }
+    // Detect markdown with code fences, headers, or tables
+    if (text.match(/```[\s\S]{20,}```/)) return 'markdown';
+    return null;
+  }
+
+  function extractCodeBlocks(text) {
+    const blocks = [];
+    const fenceRegex = /```(\w*)\n([\s\S]*?)```/g;
+    let match;
+    while ((match = fenceRegex.exec(text)) !== null) {
+      blocks.push({ lang: match[1], code: match[2].trim() });
+    }
+    return blocks;
+  }
+
+  function flushResponseBuffer() {
+    const raw = responseBuffer;
+    responseBuffer = '';
+    isResponding = false;
+    if (!raw.trim()) return;
+
+    const clean = cleanResponseText(raw);
+    const contentType = detectContent(clean);
+
+    if (contentType) {
+      openPreviewModal(clean, contentType);
+    }
+  }
+
+  // Show loading spinner until Claude Code's prompt is ready
+  const loadingEl = document.getElementById('terminal-loading');
+  let startupDone = false;
+
   window.api.onPtyOutput((data) => {
     term.write(data);
+
+    if (loadingEl && !startupDone) {
+      const p = stripAnsi(data);
+      if (p.includes('❯') || p.includes('>  ') || p.includes('accept edits')) {
+        startupDone = true;
+        loadingEl.classList.add('fade-out');
+        setTimeout(() => loadingEl.remove(), 500);
+      }
+    }
+
+    // Buffer response text for voice readback
+    const plain = stripAnsi(data);
+    if (plain.includes('●') || plain.includes('⏺')) {
+      console.log('[Voice] response marker detected, start buffering');
+      isResponding = true;
+      responseBuffer = '';
+    }
+    if (isResponding) {
+      responseBuffer += plain;
+      // Stop buffering when the input prompt returns (response complete)
+      // The ❯ or > prompt at start of line means Claude finished responding
+      if (responseTimeout) clearTimeout(responseTimeout);
+      if (plain.match(/[❯>]\s*$/) || plain.includes('❯')) {
+        console.log('[Voice] prompt detected, flushing now');
+        clearTimeout(responseTimeout);
+        flushResponseBuffer();
+      } else {
+        responseTimeout = setTimeout(() => {
+          console.log('[Voice] idle 800ms, flushing buffer');
+          flushResponseBuffer();
+        }, 800);
+      }
+    }
   });
 
   // PTY exit
@@ -379,6 +512,7 @@ attachBtn.addEventListener('click', async () => {
 function sendFromGUI() {
   const text = input.value.trim();
   if (!text && state.pendingImages.length === 0 && state.pendingFiles.length === 0) return;
+  if (text) pushHistory(text);
 
   // Build prompt — must be single-line to avoid PTY newline = Enter/submit issues
   const imagePaths = state.pendingImages.map(img => img.path).filter(Boolean);
@@ -412,6 +546,22 @@ function sendFromGUI() {
   input.focus();
 }
 
+// === Input history ===
+const inputHistory = JSON.parse(localStorage.getItem('claude-chat-input-history') || '[]');
+let historyIndex = -1;
+let historyDraft = '';
+
+function pushHistory(text) {
+  if (!text.trim()) return;
+  // Avoid duplicating the last entry
+  if (inputHistory.length > 0 && inputHistory[inputHistory.length - 1] === text) return;
+  inputHistory.push(text);
+  // Keep last 100 entries
+  if (inputHistory.length > 100) inputHistory.shift();
+  localStorage.setItem('claude-chat-input-history', JSON.stringify(inputHistory));
+  historyIndex = -1;
+}
+
 // === Settings ===
 const settings = {
   enterSend: localStorage.getItem('claude-chat-enter-send') !== 'false',
@@ -430,6 +580,25 @@ input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && e.ctrlKey) {
       e.preventDefault();
       sendFromGUI();
+    }
+  }
+  // Up/Down arrow for input history
+  if (e.key === 'ArrowUp' && inputHistory.length > 0) {
+    e.preventDefault();
+    if (historyIndex === -1) historyDraft = input.value;
+    if (historyIndex < inputHistory.length - 1) {
+      historyIndex++;
+      input.value = inputHistory[inputHistory.length - 1 - historyIndex];
+    }
+  }
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    if (historyIndex > 0) {
+      historyIndex--;
+      input.value = inputHistory[inputHistory.length - 1 - historyIndex];
+    } else if (historyIndex === 0) {
+      historyIndex = -1;
+      input.value = historyDraft;
     }
   }
 });
@@ -714,7 +883,12 @@ async function loadTTSVoices() {
   }
 }
 
-loadTTSVoices();
+// Load voices — retry after 5s if initial load returns empty (main process may still be starting)
+loadTTSVoices().then(() => {
+  if (voiceSelect.value === '' || voiceSelect.options.length <= 1) {
+    setTimeout(loadTTSVoices, 5000);
+  }
+});
 
 voiceToggle.checked = localStorage.getItem('claude-chat-voice-on') === 'true';
 voiceSelect.addEventListener('change', () => localStorage.setItem('claude-chat-voice', voiceSelect.value));
@@ -724,6 +898,75 @@ voiceStop.addEventListener('click', () => {
   if (currentAudio) { currentAudio.pause(); currentAudio = null; }
   window.api.ttsStop();
   voiceControls.classList.add('hidden');
+});
+
+// === Content Preview Modal ===
+const previewModal = document.getElementById('preview-modal');
+const previewRendered = document.getElementById('preview-rendered');
+const previewSourceCode = document.getElementById('preview-source-code');
+const previewCopy = document.getElementById('preview-copy');
+const previewClose = document.getElementById('preview-close');
+const previewTitle = document.getElementById('preview-title');
+let previewRawContent = '';
+
+function openPreviewModal(content, type) {
+  previewRawContent = content;
+
+  if (type === 'html') {
+    // Extract HTML — try to get content from code fences first, fallback to raw
+    let html = content;
+    const fenceMatch = content.match(/```(?:html)?\n([\s\S]*?)```/);
+    if (fenceMatch) html = fenceMatch[1].trim();
+
+    previewTitle.textContent = 'HTML Preview';
+    const iframe = document.createElement('iframe');
+    iframe.sandbox = 'allow-same-origin';
+    iframe.srcdoc = html;
+    previewRendered.innerHTML = '';
+    previewRendered.appendChild(iframe);
+    previewSourceCode.textContent = html;
+    previewRawContent = html;
+  } else {
+    // Markdown or other — show source, extract code blocks
+    previewTitle.textContent = 'Content Preview';
+    const blocks = [];
+    const fenceRegex = /```(\w*)\n([\s\S]*?)```/g;
+    let match;
+    while ((match = fenceRegex.exec(content)) !== null) {
+      blocks.push({ lang: match[1], code: match[2].trim() });
+    }
+    if (blocks.length > 0) {
+      previewRendered.innerHTML = blocks.map((b, i) =>
+        `<div style="margin-bottom:12px"><div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">${b.lang || 'code'} (block ${i + 1})</div><pre style="background:var(--bg-tertiary);padding:12px;border-radius:6px;overflow-x:auto;"><code>${escapeHtml(b.code)}</code></pre></div>`
+      ).join('');
+      previewSourceCode.textContent = blocks.map(b => b.code).join('\n\n');
+      previewRawContent = blocks.map(b => b.code).join('\n\n');
+    } else {
+      previewRendered.innerHTML = `<pre>${escapeHtml(content)}</pre>`;
+      previewSourceCode.textContent = content;
+    }
+  }
+
+  previewModal.classList.remove('hidden');
+}
+
+document.querySelectorAll('.preview-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.preview-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    previewRendered.style.display = tab.dataset.view === 'rendered' ? '' : 'none';
+    document.getElementById('preview-source').style.display = tab.dataset.view === 'source' ? '' : 'none';
+  });
+});
+
+previewCopy.addEventListener('click', () => {
+  navigator.clipboard.writeText(previewRawContent);
+  showToast('Copied to clipboard');
+});
+
+previewClose.addEventListener('click', () => previewModal.classList.add('hidden'));
+previewModal.addEventListener('click', (e) => {
+  if (e.target === previewModal) previewModal.classList.add('hidden');
 });
 
 // === Config Panel ===
@@ -812,6 +1055,10 @@ async function openConfig() {
   configEnterSend.checked = settings.enterSend;
   configNotifications.checked = settings.notifications;
   configSearch.value = '';
+  // Reload voices if sidebar has none yet
+  if (voiceSelect.options.length <= 1 && voiceSelect.value === '') {
+    await loadTTSVoices();
+  }
   configVoiceSelect.innerHTML = voiceSelect.innerHTML;
   configVoiceSelect.value = voiceSelect.value;
   await renderClaudeConfig();
