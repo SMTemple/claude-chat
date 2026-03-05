@@ -523,6 +523,85 @@ kbd {
 }
 .wizard-btn-secondary:hover { border-color: var(--accent); }
 
+/* === Artifacts Panel === */
+#artifacts-panel {
+  width: 300px; background: var(--bg-secondary);
+  border-left: 1px solid var(--border); display: flex;
+  flex-direction: column; flex-shrink: 0; overflow: hidden;
+}
+#artifacts-panel.hidden { display: none; }
+
+.artifacts-header {
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 10px; border-bottom: 1px solid var(--border);
+}
+.artifacts-header .sidebar-label { flex: 1; }
+
+.artifacts-badge {
+  background: var(--accent); color: white; font-size: 10px; font-weight: 600;
+  padding: 1px 6px; border-radius: 10px; min-width: 18px; text-align: center;
+}
+.artifacts-badge[data-count="0"] { background: var(--bg-tertiary); color: var(--text-muted); }
+
+#artifacts-list {
+  flex: 1; overflow-y: auto; padding: 6px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+
+.artifact-card {
+  background: var(--bg-tertiary); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); cursor: pointer; transition: all 0.15s;
+  overflow: hidden;
+}
+.artifact-card:hover { border-color: var(--accent); }
+.artifact-card.expanded { border-color: var(--accent); }
+
+.artifact-card-header {
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+  font-size: 12px; color: var(--text-primary); user-select: none;
+}
+.artifact-card-icon { font-size: 14px; flex-shrink: 0; }
+.artifact-card-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.artifact-card-type {
+  font-size: 10px; color: var(--text-muted); text-transform: uppercase;
+  letter-spacing: 0.5px; flex-shrink: 0;
+}
+.artifact-card-chevron {
+  font-size: 10px; color: var(--text-muted); transition: transform 0.2s; flex-shrink: 0;
+}
+.artifact-card.expanded .artifact-card-chevron { transform: rotate(90deg); }
+
+.artifact-card-body {
+  display: none; border-top: 1px solid var(--border);
+  max-height: 300px; overflow: auto;
+}
+.artifact-card.expanded .artifact-card-body { display: block; }
+
+.artifact-card-body iframe {
+  width: 100%; height: 200px; border: none; background: white; border-radius: 0 0 4px 4px;
+}
+.artifact-card-body pre {
+  padding: 10px; font-size: 11px; font-family: var(--font-mono);
+  color: var(--text-primary); white-space: pre-wrap; word-break: break-word;
+  background: var(--bg-primary); margin: 0;
+}
+
+.artifact-card-actions {
+  display: flex; gap: 4px; padding: 6px 10px;
+  border-top: 1px solid var(--border); background: var(--bg-secondary);
+}
+.artifact-card-actions button {
+  flex: 1; padding: 4px 8px; font-size: 11px; cursor: pointer;
+  background: var(--bg-tertiary); border: 1px solid var(--border);
+  border-radius: 4px; color: var(--text-secondary); transition: all 0.15s;
+}
+.artifact-card-actions button:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+#artifacts-empty {
+  padding: 20px 10px; text-align: center;
+  font-size: 12px; color: var(--text-muted);
+}
+
 /* === Responsive === */
 @media (max-width: 768px) {
   #sidebar { display: none; }

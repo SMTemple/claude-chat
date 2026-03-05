@@ -218,7 +218,13 @@ function initTerminal() {
   let responseTimeout = null;
 
   function stripAnsi(str) {
-    return str.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '');
+    return str
+      .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')   // CSI sequences (including ? params)
+      .replace(/\x1b\][^\x07]*\x07/g, '')         // OSC sequences
+      .replace(/\x1b[()][A-Z0-9]/g, '')           // charset sequences
+      .replace(/\x1b[=><!]/g, '')                  // mode sequences
+      .replace(/\x1b\[[\d;]*m/g, '')              // SGR leftovers
+      .replace(/\r/g, '');                         // carriage returns
   }
 
   function cleanResponseText(raw) {
@@ -267,8 +273,9 @@ function initTerminal() {
     const clean = cleanResponseText(raw);
     const contentType = detectContent(clean);
 
+
     if (contentType) {
-      openPreviewModal(clean, contentType);
+      addArtifact(clean, contentType);
     }
   }
 
@@ -288,10 +295,9 @@ function initTerminal() {
       }
     }
 
-    // Buffer response text for voice readback
+    // Buffer response text for content detection
     const plain = stripAnsi(data);
     if (plain.includes('●') || plain.includes('⏺')) {
-      console.log('[Voice] response marker detected, start buffering');
       isResponding = true;
       responseBuffer = '';
     }
@@ -301,12 +307,10 @@ function initTerminal() {
       // The ❯ or > prompt at start of line means Claude finished responding
       if (responseTimeout) clearTimeout(responseTimeout);
       if (plain.match(/[❯>]\s*$/) || plain.includes('❯')) {
-        console.log('[Voice] prompt detected, flushing now');
         clearTimeout(responseTimeout);
         flushResponseBuffer();
       } else {
         responseTimeout = setTimeout(() => {
-          console.log('[Voice] idle 800ms, flushing buffer');
           flushResponseBuffer();
         }, 800);
       }
@@ -647,6 +651,9 @@ newChatBtn.addEventListener('click', async () => {
     const dims = { cols: term.cols, rows: term.rows };
     await window.api.restartClaude(dims);
   }
+  // Clear session artifacts
+  artifacts.length = 0;
+  renderArtifacts();
   showToast('New conversation');
 });
 
@@ -834,6 +841,152 @@ explorerUp.addEventListener('click', () => {
 
 explorerRefresh.addEventListener('click', () => loadExplorer(explorerCurrentDir));
 
+// === Artifacts Panel ===
+const artifactsPanel = document.getElementById('artifacts-panel');
+const artifactsList = document.getElementById('artifacts-list');
+const artifactsCount = document.getElementById('artifacts-count');
+const artifactsClear = document.getElementById('artifacts-clear');
+const artifactsClose = document.getElementById('artifacts-close');
+const toggleArtifacts = document.getElementById('toggle-artifacts');
+const artifacts = [];
+
+function addArtifact(content, type) {
+  const id = 'artifact-' + Date.now();
+  const title = type === 'html' ? 'HTML' : 'Code';
+  // Try to extract a better title from content
+  let label = title;
+  if (type === 'html') {
+    const titleMatch = content.match(/<title>(.*?)<\/title>/i);
+    if (titleMatch) label = titleMatch[1];
+  }
+  artifacts.push({ id, content, type, label });
+  renderArtifacts();
+  // Auto-show the panel when artifact is added
+  artifactsPanel.classList.remove('hidden');
+}
+
+function renderArtifacts() {
+  artifactsCount.textContent = artifacts.length;
+  artifactsCount.dataset.count = artifacts.length;
+  artifactsList.innerHTML = '';
+
+  if (artifacts.length === 0) {
+    artifactsList.innerHTML = '<div id="artifacts-empty">No artifacts yet. Claude\'s HTML and code outputs will appear here.</div>';
+    return;
+  }
+
+  for (let i = artifacts.length - 1; i >= 0; i--) {
+    const a = artifacts[i];
+    const card = document.createElement('div');
+    card.className = 'artifact-card';
+    card.dataset.id = a.id;
+
+    const icon = a.type === 'html' ? '&#127760;' : '&#128196;';
+    card.innerHTML = `
+      <div class="artifact-card-header">
+        <span class="artifact-card-icon">${icon}</span>
+        <span class="artifact-card-title">${escapeHtml(a.label)} #${i + 1}</span>
+        <span class="artifact-card-type">${a.type}</span>
+        <span class="artifact-card-chevron">&#9654;</span>
+      </div>
+      <div class="artifact-card-body"></div>
+    `;
+
+    // Click header to toggle expand/collapse
+    const header = card.querySelector('.artifact-card-header');
+    header.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const wasExpanded = card.classList.contains('expanded');
+      // Collapse all others
+      artifactsList.querySelectorAll('.artifact-card.expanded').forEach(c => c.classList.remove('expanded'));
+      if (!wasExpanded) {
+        card.classList.add('expanded');
+        renderArtifactBody(card, a);
+      }
+    });
+
+    artifactsList.appendChild(card);
+  }
+}
+
+function renderArtifactBody(card, artifact) {
+  const body = card.querySelector('.artifact-card-body');
+  if (body.dataset.rendered) return; // already rendered
+  body.dataset.rendered = '1';
+
+  if (artifact.type === 'html') {
+    let html = artifact.content;
+    const fenceMatch = html.match(/```(?:html)?\n([\s\S]*?)```/);
+    if (fenceMatch) html = fenceMatch[1].trim();
+
+    const iframe = document.createElement('iframe');
+    iframe.sandbox = 'allow-same-origin';
+    iframe.srcdoc = html;
+    body.appendChild(iframe);
+
+    const actions = document.createElement('div');
+    actions.className = 'artifact-card-actions';
+    actions.innerHTML = `<button class="copy-src">Copy Source</button><button class="open-preview">Open Full Preview</button>`;
+    actions.querySelector('.copy-src').addEventListener('click', (e) => {
+      e.stopPropagation();
+      navigator.clipboard.writeText(html);
+      showToast('HTML copied');
+    });
+    actions.querySelector('.open-preview').addEventListener('click', (e) => {
+      e.stopPropagation();
+      openPreviewModal(artifact.content, artifact.type);
+    });
+    body.appendChild(actions);
+  } else {
+    // Markdown/code
+    const blocks = [];
+    const fenceRegex = /```(\w*)\n([\s\S]*?)```/g;
+    let match;
+    while ((match = fenceRegex.exec(artifact.content)) !== null) {
+      blocks.push({ lang: match[1], code: match[2].trim() });
+    }
+    const codeText = blocks.length > 0 ? blocks.map(b => b.code).join('\n\n') : artifact.content;
+    const pre = document.createElement('pre');
+    pre.textContent = codeText.slice(0, 2000) + (codeText.length > 2000 ? '\n...(truncated)' : '');
+    body.appendChild(pre);
+
+    const actions = document.createElement('div');
+    actions.className = 'artifact-card-actions';
+    actions.innerHTML = `<button class="copy-src">Copy Code</button><button class="open-preview">Open Full Preview</button>`;
+    actions.querySelector('.copy-src').addEventListener('click', (e) => {
+      e.stopPropagation();
+      navigator.clipboard.writeText(codeText);
+      showToast('Code copied');
+    });
+    actions.querySelector('.open-preview').addEventListener('click', (e) => {
+      e.stopPropagation();
+      openPreviewModal(artifact.content, artifact.type);
+    });
+    body.appendChild(actions);
+  }
+}
+
+// Click outside to collapse expanded artifacts
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.artifact-card') && !e.target.closest('.artifact-card-actions')) {
+    artifactsList.querySelectorAll('.artifact-card.expanded').forEach(c => c.classList.remove('expanded'));
+  }
+});
+
+toggleArtifacts.addEventListener('click', () => {
+  artifactsPanel.classList.toggle('hidden');
+});
+
+artifactsClose.addEventListener('click', () => artifactsPanel.classList.add('hidden'));
+
+artifactsClear.addEventListener('click', () => {
+  artifacts.length = 0;
+  renderArtifacts();
+  showToast('Artifacts cleared');
+});
+
+renderArtifacts();
+
 // === Voice Readback ===
 const voiceToggle = document.getElementById('voice-toggle');
 const voiceSelect = document.getElementById('voice-select');
@@ -905,6 +1058,7 @@ const previewModal = document.getElementById('preview-modal');
 const previewRendered = document.getElementById('preview-rendered');
 const previewSourceCode = document.getElementById('preview-source-code');
 const previewCopy = document.getElementById('preview-copy');
+const previewCopyRendered = document.getElementById('preview-copy-rendered');
 const previewClose = document.getElementById('preview-close');
 const previewTitle = document.getElementById('preview-title');
 let previewRawContent = '';
@@ -961,7 +1115,14 @@ document.querySelectorAll('.preview-tab').forEach(tab => {
 
 previewCopy.addEventListener('click', () => {
   navigator.clipboard.writeText(previewRawContent);
-  showToast('Copied to clipboard');
+  showToast('Source copied');
+});
+
+previewCopyRendered.addEventListener('click', () => {
+  // Copy the visible rendered text (or rendered HTML for pasting into rich editors)
+  const rendered = previewRendered.innerText || previewRendered.textContent;
+  navigator.clipboard.writeText(rendered);
+  showToast('Rendered text copied');
 });
 
 previewClose.addEventListener('click', () => previewModal.classList.add('hidden'));

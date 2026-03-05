@@ -93,6 +93,7 @@
     <aside id="sidebar">
       <div style="display:flex;gap:6px;margin-bottom:4px;">
         <button id="toggle-explorer" class="sidebar-icon-btn" title="Toggle file explorer" style="margin-left:auto;">&#128193;</button>
+        <button id="toggle-artifacts" class="sidebar-icon-btn" title="Toggle artifacts panel">&#128640;</button>
       </div>
       <button id="new-chat-btn" title="New conversation (restarts Claude)">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
@@ -187,6 +188,17 @@
       <div id="explorer-path"></div>
       <div id="explorer-list"></div>
     </aside>
+
+    <!-- Artifacts Panel -->
+    <aside id="artifacts-panel" class="hidden">
+      <div class="artifacts-header">
+        <span class="sidebar-label">ARTIFACTS</span>
+        <span id="artifacts-count" class="artifacts-badge">0</span>
+        <button id="artifacts-clear" class="sidebar-icon-btn" title="Clear all">&#128465;</button>
+        <button id="artifacts-close" class="sidebar-icon-btn" title="Close">&times;</button>
+      </div>
+      <div id="artifacts-list"></div>
+    </aside>
   </div>
 
   <!-- Config modal -->
@@ -275,6 +287,7 @@
       <div id="preview-rendered" class="preview-body"></div>
       <div id="preview-source" class="preview-body" style="display:none"><pre><code id="preview-source-code"></code></pre></div>
       <div class="modal-actions">
+        <button id="preview-copy-rendered" class="modal-btn">Copy Rendered</button>
         <button id="preview-copy" class="modal-btn primary">Copy Source</button>
         <button id="preview-close" class="modal-btn">Close</button>
       </div>
