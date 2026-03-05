@@ -1,5 +1,5 @@
 const { app, BrowserWindow, ipcMain, shell, dialog, Notification, desktopCapturer } = require('electron');
-const { spawn } = require('child_process');
+const pty = require('node-pty');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -8,9 +8,7 @@ const TEMP_DIR = path.join(os.tmpdir(), 'claude-chat-images');
 if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 
 let mainWindow;
-let activeProcess = null;
-let sessionId = null;
-// Read default model from Claude Code config
+let ptyProcess = null;
 let currentModel = 'opus';
 try {
   const claudeConfig = path.join(os.homedir(), '.claude', 'settings.local.json');
@@ -37,7 +35,6 @@ function saveAppConfig(config) {
   fs.writeFileSync(APP_CONFIG_FILE, JSON.stringify(config, null, 2), 'utf-8');
 }
 
-// Load saved CWD from app config if available
 const appConfig = loadAppConfig();
 if (appConfig.cwd && fs.existsSync(appConfig.cwd)) {
   currentCwd = appConfig.cwd;
@@ -55,17 +52,20 @@ function savePrompts(prompts) {
 }
 
 function createWindow() {
+  const { screen } = require('electron');
+  const { width: screenW, height: screenH } = screen.getPrimaryDisplay().workAreaSize;
+
   mainWindow = new BrowserWindow({
-    width: 1100,
-    height: 800,
+    width: Math.round(screenW * 0.85),
+    height: Math.round(screenH * 0.9),
     minWidth: 600,
     minHeight: 400,
     backgroundColor: '#0d0d14',
     icon: path.join(__dirname, 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
+      contextIsolation: false,
+      nodeIntegration: true,
       sandbox: false,
     },
     show: false,
@@ -78,7 +78,6 @@ function createWindow() {
     mainWindow.moveTop();
   });
 
-  // Send init state on every page load (including Ctrl+R reload)
   mainWindow.webContents.on('did-finish-load', () => {
     mainWindow.webContents.send('init-state', { cwd: currentCwd, model: currentModel });
   });
@@ -88,7 +87,6 @@ function createWindow() {
     return { action: 'deny' };
   });
 
-  // Keyboard shortcuts
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (input.control && input.key === 'r') {
       mainWindow.webContents.reloadIgnoringCache();
@@ -101,7 +99,6 @@ function createWindow() {
   });
 }
 
-// Single instance lock — prevent multiple windows
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
@@ -115,9 +112,77 @@ if (!gotLock) {
   });
   app.whenReady().then(createWindow);
 }
-app.on('window-all-closed', () => app.quit());
+app.on('window-all-closed', () => {
+  if (ptyProcess) { try { ptyProcess.kill(); } catch (e) {} }
+  app.quit();
+});
 
-// Save pasted image to temp file, return path
+// === PTY Management ===
+function spawnClaude(cols, rows) {
+  if (ptyProcess) {
+    try { ptyProcess.kill(); } catch (e) {}
+    ptyProcess = null;
+  }
+
+  const env = { ...process.env };
+  delete env.CLAUDECODE;
+  // Force color and terminal support
+  env.FORCE_COLOR = '1';
+  env.TERM = 'xterm-256color';
+
+  // Resolve claude executable path
+  let claudeExe = 'claude';
+  if (process.platform === 'win32') {
+    // Try common locations if not in PATH
+    const localBin = path.join(os.homedir(), '.local', 'bin', 'claude.exe');
+    if (fs.existsSync(localBin)) claudeExe = localBin;
+  }
+
+  ptyProcess = pty.spawn(claudeExe, ['--model', currentModel], {
+    name: 'xterm-256color',
+    cols: cols || 120,
+    rows: rows || 30,
+    cwd: currentCwd,
+    env,
+  });
+
+  ptyProcess.onData((data) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('pty-output', data);
+    }
+  });
+
+  ptyProcess.onExit(({ exitCode }) => {
+    ptyProcess = null;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('pty-exit', exitCode);
+    }
+  });
+}
+
+ipcMain.handle('start-claude', (_event, { cols, rows }) => {
+  spawnClaude(cols, rows);
+  return true;
+});
+
+ipcMain.handle('pty-input', (_event, data) => {
+  if (ptyProcess) ptyProcess.write(data);
+  return true;
+});
+
+ipcMain.handle('resize-pty', (_event, { cols, rows }) => {
+  if (ptyProcess) {
+    try { ptyProcess.resize(cols, rows); } catch (e) {}
+  }
+  return true;
+});
+
+ipcMain.handle('restart-claude', (_event, { cols, rows }) => {
+  spawnClaude(cols, rows);
+  return true;
+});
+
+// === Image/File Handling ===
 ipcMain.handle('save-image', async (_event, dataURL) => {
   const matches = dataURL.match(/^data:image\/(\w+);base64,(.+)$/);
   if (!matches) return null;
@@ -129,32 +194,11 @@ ipcMain.handle('save-image', async (_event, dataURL) => {
   return filepath;
 });
 
-// New conversation
-ipcMain.handle('new-conversation', () => {
-  if (activeProcess) {
-    activeProcess.kill();
-    activeProcess = null;
-  }
-  sessionId = null;
-  return true;
-});
-
-// Abort current response
-ipcMain.handle('abort-response', () => {
-  if (activeProcess) {
-    activeProcess.kill();
-    activeProcess = null;
-  }
-  return true;
-});
-
-// Set model
 ipcMain.handle('set-model', (_event, model) => {
   currentModel = model;
   return true;
 });
 
-// Set working directory
 ipcMain.handle('set-cwd', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openDirectory'],
@@ -162,7 +206,6 @@ ipcMain.handle('set-cwd', async () => {
   });
   if (result.filePaths && result.filePaths[0]) {
     currentCwd = result.filePaths[0];
-    // Persist to app config
     const config = loadAppConfig();
     config.cwd = currentCwd;
     saveAppConfig(config);
@@ -171,20 +214,18 @@ ipcMain.handle('set-cwd', async () => {
   return null;
 });
 
-// Export conversation as markdown
-ipcMain.handle('export-conversation', async (_event, markdown) => {
+ipcMain.handle('export-conversation', async (_event, text) => {
   const result = await dialog.showSaveDialog(mainWindow, {
-    defaultPath: `claude-chat-${new Date().toISOString().slice(0, 10)}.md`,
-    filters: [{ name: 'Markdown', extensions: ['md'] }, { name: 'Text', extensions: ['txt'] }],
+    defaultPath: `claude-chat-${new Date().toISOString().slice(0, 10)}.txt`,
+    filters: [{ name: 'Text', extensions: ['txt'] }, { name: 'Markdown', extensions: ['md'] }],
   });
   if (result.filePath) {
-    fs.writeFileSync(result.filePath, markdown, 'utf-8');
+    fs.writeFileSync(result.filePath, text, 'utf-8');
     return result.filePath;
   }
   return null;
 });
 
-// Desktop notification
 ipcMain.handle('notify', (_event, { title, body }) => {
   if (Notification.isSupported() && !mainWindow.isFocused()) {
     const n = new Notification({ title, body });
@@ -194,7 +235,6 @@ ipcMain.handle('notify', (_event, { title, body }) => {
   return true;
 });
 
-// Screen capture
 ipcMain.handle('screen-capture', async () => {
   try {
     const sources = await desktopCapturer.getSources({
@@ -214,92 +254,6 @@ ipcMain.handle('screen-capture', async () => {
     console.error('Screen capture failed:', e);
   }
   return null;
-});
-
-// Send message to Claude CLI
-ipcMain.handle('send-message', async (event, { text, imagePaths, model, cwd }) => {
-  if (activeProcess) {
-    activeProcess.kill();
-    activeProcess = null;
-  }
-
-  // Build the prompt
-  let prompt = '';
-  if (imagePaths && imagePaths.length > 0) {
-    const imageExts = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'];
-    const images = imagePaths.filter(p => imageExts.some(ext => p.toLowerCase().endsWith(ext)));
-    const files = imagePaths.filter(p => !imageExts.some(ext => p.toLowerCase().endsWith(ext)));
-
-    if (images.length > 0) {
-      prompt += 'I am sharing images with you. Please use the Read tool to view each one:\n';
-      for (const p of images) prompt += `- ${p}\n`;
-      prompt += '\n';
-    }
-    if (files.length > 0) {
-      prompt += 'I am sharing files with you. Please use the Read tool to view each one:\n';
-      for (const p of files) prompt += `- ${p}\n`;
-      prompt += '\n';
-    }
-  }
-  prompt += text;
-
-  const useModel = model || currentModel;
-  const useCwd = cwd || currentCwd;
-
-  const args = ['-p', '--output-format', 'stream-json', '--verbose', '--model', useModel];
-  if (sessionId) {
-    args.push('--resume', sessionId);
-  }
-
-  const env = { ...process.env };
-  delete env.CLAUDECODE;
-
-  const proc = spawn('claude', args, {
-    env,
-    shell: true,
-    cwd: useCwd,
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
-
-  activeProcess = proc;
-  let lineBuffer = '';
-
-  proc.stdin.write(prompt);
-  proc.stdin.end();
-
-  proc.stdout.on('data', (chunk) => {
-    lineBuffer += chunk.toString();
-    const lines = lineBuffer.split('\n');
-    lineBuffer = lines.pop();
-
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      try {
-        const obj = JSON.parse(line);
-        if (obj.session_id) sessionId = obj.session_id;
-        mainWindow.webContents.send('claude-event', obj);
-      } catch (e) {}
-    }
-  });
-
-  proc.stderr.on('data', (chunk) => {
-    const text = chunk.toString().trim();
-    if (text) mainWindow.webContents.send('claude-error', text);
-  });
-
-  proc.on('close', (code) => {
-    if (lineBuffer.trim()) {
-      try {
-        const obj = JSON.parse(lineBuffer);
-        if (obj.session_id) sessionId = obj.session_id;
-        mainWindow.webContents.send('claude-event', obj);
-      } catch (e) {}
-    }
-    activeProcess = null;
-    mainWindow.webContents.send('claude-done', { code, sessionId });
-  });
-
-  return true;
 });
 
 // === Saved Prompts ===
@@ -332,7 +286,6 @@ ipcMain.handle('update-prompt', (_event, updated) => {
 const CLAUDE_SETTINGS_FILE = path.join(os.homedir(), '.claude', 'settings.json');
 const CLAUDE_LOCAL_SETTINGS = path.join(os.homedir(), '.claude', 'settings.local.json');
 
-// Known Claude Code config keys with metadata
 const CLAUDE_CONFIG_SCHEMA = [
   { key: 'autoCompact', label: 'Auto-compact', type: 'boolean', default: true },
   { key: 'showTips', label: 'Show tips', type: 'boolean', default: true },
@@ -342,23 +295,20 @@ const CLAUDE_CONFIG_SCHEMA = [
   { key: 'verbose', label: 'Verbose output', type: 'boolean', default: true },
   { key: 'terminalProgressBar', label: 'Terminal progress bar', type: 'boolean', default: true },
   { key: 'respectGitignore', label: 'Respect .gitignore in file picker', type: 'boolean', default: true },
-  { key: 'copyFullResponse', label: 'Always copy full response (skip /copy picker)', type: 'boolean', default: false },
-  { key: 'autoConnect', label: 'Auto-connect to IDE (external terminal)', type: 'boolean', default: false },
+  { key: 'copyFullResponse', label: 'Always copy full response', type: 'boolean', default: false },
+  { key: 'autoConnect', label: 'Auto-connect to IDE', type: 'boolean', default: false },
   { key: 'showPRStatusFooter', label: 'Show PR status footer', type: 'boolean', default: true },
   { key: 'permissions.defaultMode', label: 'Default permission mode', type: 'enum', options: ['default', 'acceptEdits', 'dontAsk', 'bypassPermissions', 'plan'], default: 'acceptEdits' },
   { key: 'autoUpdateChannel', label: 'Auto-update channel', type: 'enum', options: ['latest', 'stable', 'none'], default: 'latest' },
   { key: 'theme', label: 'Theme', type: 'enum', options: ['Dark mode', 'Light mode', 'Auto'], default: 'Dark mode' },
   { key: 'notifications', label: 'Notifications', type: 'enum', options: ['Auto', 'Always', 'Never'], default: 'Auto' },
   { key: 'outputStyle', label: 'Output style', type: 'enum', options: ['default', 'concise', 'verbose', 'markdown'], default: 'default' },
-  { key: 'language', label: 'Language', type: 'enum', options: ['Default (English)', 'English', 'Spanish', 'French', 'German', 'Japanese', 'Chinese', 'Korean'], default: 'Default (English)' },
-  { key: 'editorMode', label: 'Editor mode', type: 'enum', options: ['normal', 'vim', 'emacs'], default: 'normal' },
   { key: 'model', label: 'Model', type: 'enum', options: ['Default (recommended)', 'opus', 'sonnet', 'haiku'], default: 'Default (recommended)' },
   { key: 'effortLevel', label: 'Effort level', type: 'enum', options: ['low', 'medium', 'high'], default: 'high' },
 ];
 
 function readClaudeConfig() {
   const result = {};
-  // Read both settings files (local overrides global)
   for (const file of [CLAUDE_SETTINGS_FILE, CLAUDE_LOCAL_SETTINGS]) {
     try {
       if (fs.existsSync(file)) {
@@ -380,7 +330,6 @@ ipcMain.handle('set-claude-config', (_event, { key, value }) => {
     if (fs.existsSync(CLAUDE_SETTINGS_FILE)) {
       data = JSON.parse(fs.readFileSync(CLAUDE_SETTINGS_FILE, 'utf-8'));
     }
-    // Handle nested keys like 'permissions.defaultMode'
     const parts = key.split('.');
     if (parts.length === 2) {
       if (!data[parts[0]]) data[parts[0]] = {};
@@ -391,7 +340,6 @@ ipcMain.handle('set-claude-config', (_event, { key, value }) => {
     fs.writeFileSync(CLAUDE_SETTINGS_FILE, JSON.stringify(data, null, 2), 'utf-8');
     return true;
   } catch (e) {
-    console.error('[Config] Write error:', e);
     return false;
   }
 });
@@ -400,6 +348,9 @@ ipcMain.handle('set-claude-config', (_event, { key, value }) => {
 ipcMain.handle('check-setup', () => {
   const config = loadAppConfig();
   const claudeInstalled = (() => {
+    // Check common install location first, then try PATH
+    const localBin = path.join(os.homedir(), '.local', 'bin', 'claude.exe');
+    if (process.platform === 'win32' && fs.existsSync(localBin)) return true;
     try {
       const { execSync } = require('child_process');
       execSync('claude --version', { stdio: 'pipe', env: { ...process.env, CLAUDECODE: undefined } });
@@ -421,9 +372,7 @@ ipcMain.handle('complete-setup', (_event, setupData) => {
     config.cwd = setupData.cwd;
     currentCwd = setupData.cwd;
   }
-  if (setupData.model) {
-    currentModel = setupData.model;
-  }
+  if (setupData.model) currentModel = setupData.model;
   saveAppConfig(config);
   return true;
 });
@@ -443,7 +392,6 @@ ipcMain.handle('read-dir', async (_event, dirPath) => {
     const entries = fs.readdirSync(target, { withFileTypes: true });
     const results = [];
     for (const entry of entries) {
-      // Skip hidden/system files
       if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
       results.push({
         name: entry.name,
@@ -451,7 +399,6 @@ ipcMain.handle('read-dir', async (_event, dirPath) => {
         isDir: entry.isDirectory(),
       });
     }
-    // Sort: dirs first, then files, alphabetical
     results.sort((a, b) => {
       if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
       return a.name.localeCompare(b.name);
@@ -470,7 +417,6 @@ ipcMain.handle('tts-get-voices', async () => {
   try {
     const tts = new MsEdgeTTS();
     const voices = await tts.getVoices();
-    // Filter English voices
     return voices
       .filter(v => v.Locale.startsWith('en-'))
       .map(v => ({ name: v.ShortName, friendly: v.FriendlyName, locale: v.Locale, gender: v.Gender }));
@@ -481,50 +427,25 @@ ipcMain.handle('tts-get-voices', async () => {
 
 ipcMain.handle('tts-speak', async (_event, { text, voice }) => {
   try {
-    // Cancel any existing speech
-    if (ttsInstance) {
-      try { ttsInstance.close(); } catch (e) {}
-    }
-
+    if (ttsInstance) { try { ttsInstance.close(); } catch (e) {} }
     ttsInstance = new MsEdgeTTS();
     await ttsInstance.setMetadata(voice || 'en-AU-NatashaNeural', OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
-
-    // toFile expects a directory and outputs audio.mp3 inside it
     const outDir = path.join(TEMP_DIR, `tts_${Date.now()}`);
     if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
-
     const result = await ttsInstance.toFile(outDir, text);
     const filePath = result.audioFilePath || path.join(outDir, 'audio.mp3');
-
-    if (!fs.existsSync(filePath)) {
-      console.error('[TTS] Audio file not created:', filePath);
-      return { error: 'Audio file not created' };
-    }
-
-    const stat = fs.statSync(filePath);
-    console.log('[TTS] Wrote', stat.size, 'bytes to', filePath);
-
-    if (stat.size === 0) {
-      console.error('[TTS] Empty audio file');
-      return { error: 'Empty audio file' };
-    }
-
+    if (!fs.existsSync(filePath) || fs.statSync(filePath).size === 0) return { error: 'Audio file not created' };
     return filePath;
   } catch (e) {
-    console.error('[TTS] Exception:', e.message, e.stack);
     return { error: e.message };
   }
 });
 
 ipcMain.handle('tts-stop', () => {
-  if (ttsInstance) {
-    try { ttsInstance.close(); } catch (e) {}
-    ttsInstance = null;
-  }
+  if (ttsInstance) { try { ttsInstance.close(); } catch (e) {} ttsInstance = null; }
   return true;
 });
 
-// Open file dialog for any files
 ipcMain.handle('pick-images', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openFile', 'multiSelections'],

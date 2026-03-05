@@ -1,18 +1,22 @@
 {
   "name": "claude-chat",
-  "version": "1.0.0",
-  "description": "Desktop chat interface for Claude Code",
+  "version": "2.0.0",
+  "description": "Desktop terminal wrapper for Claude Code",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "dev": "electron . --dev"
+    "dev": "electron . --dev",
+    "rebuild": "npx @electron/rebuild --only node-pty"
   },
   "devDependencies": {
+    "@electron/rebuild": "^3.7.2",
     "electron": "^33.0.0"
   },
   "dependencies": {
-    "highlight.js": "^11.11.0",
-    "marked": "^15.0.0",
-    "msedge-tts": "^2.0.4"
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-web-links": "^0.12.0",
+    "@xterm/xterm": "^6.0.0",
+    "msedge-tts": "^2.0.4",
+    "node-pty": "^1.1.0"
   }
 }

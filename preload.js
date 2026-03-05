@@ -1,34 +1,25 @@
-const { contextBridge, ipcRenderer, webUtils } = require('electron');
-const { Marked } = require('marked');
-const hljs = require('highlight.js/lib/common');
+const { ipcRenderer } = require('electron');
+const { webUtils } = require('electron');
 
-const marked = new Marked({
-  renderer: {
-    code({ text, lang }) {
-      const language = lang && hljs.getLanguage(lang) ? lang : 'plaintext';
-      const highlighted = hljs.highlight(text, { language }).value;
-      const escaped = lang ? lang.replace(/"/g, '&quot;') : 'plaintext';
-      return `<div class="code-block"><div class="code-header"><span class="code-lang">${escaped}</span><button class="copy-btn" data-copy>Copy</button></div><pre><code class="hljs language-${escaped}">${highlighted}</code></pre></div>`;
-    },
-    link({ href, text }) {
-      return `<a href="${href}" target="_blank" rel="noopener">${text}</a>`;
-    },
-  },
-  gfm: true,
-  breaks: false,
-});
+window.api = {
+  // PTY
+  startClaude: (opts) => ipcRenderer.invoke('start-claude', opts),
+  ptyInput: (data) => ipcRenderer.invoke('pty-input', data),
+  resizePty: (cols, rows) => ipcRenderer.invoke('resize-pty', { cols, rows }),
+  restartClaude: (opts) => ipcRenderer.invoke('restart-claude', opts),
+  onPtyOutput: (cb) => ipcRenderer.on('pty-output', (_e, data) => cb(data)),
+  onPtyExit: (cb) => ipcRenderer.on('pty-exit', (_e, code) => cb(code)),
 
-contextBridge.exposeInMainWorld('api', {
-  sendMessage: (text, imagePaths, model, cwd) => ipcRenderer.invoke('send-message', { text, imagePaths, model, cwd }),
-  newConversation: () => ipcRenderer.invoke('new-conversation'),
-  abortResponse: () => ipcRenderer.invoke('abort-response'),
+  // Files & images
   saveImage: (dataURL) => ipcRenderer.invoke('save-image', dataURL),
   pickImages: () => ipcRenderer.invoke('pick-images'),
+  screenCapture: () => ipcRenderer.invoke('screen-capture'),
+
+  // Settings
   setModel: (model) => ipcRenderer.invoke('set-model', model),
   setCwd: () => ipcRenderer.invoke('set-cwd'),
-  exportConversation: (md) => ipcRenderer.invoke('export-conversation', md),
+  exportConversation: (text) => ipcRenderer.invoke('export-conversation', text),
   notify: (title, body) => ipcRenderer.invoke('notify', { title, body }),
-  screenCapture: () => ipcRenderer.invoke('screen-capture'),
 
   // Saved prompts
   getPrompts: () => ipcRenderer.invoke('get-prompts'),
@@ -48,20 +39,15 @@ contextBridge.exposeInMainWorld('api', {
   completeSetup: (data) => ipcRenderer.invoke('complete-setup', data),
   pickDirectory: () => ipcRenderer.invoke('pick-directory'),
 
-  onClaudeEvent: (cb) => ipcRenderer.on('claude-event', (_e, data) => cb(data)),
-  onClaudeDone: (cb) => ipcRenderer.on('claude-done', (_e, data) => cb(data)),
-  onClaudeError: (cb) => ipcRenderer.on('claude-error', (_e, msg) => cb(msg)),
   onInitState: (cb) => ipcRenderer.on('init-state', (_e, data) => cb(data)),
-
-  renderMarkdown: (text) => marked.parse(text),
 
   // TTS
   ttsGetVoices: () => ipcRenderer.invoke('tts-get-voices'),
   ttsSpeak: (text, voice) => ipcRenderer.invoke('tts-speak', { text, voice }),
   ttsStop: () => ipcRenderer.invoke('tts-stop'),
 
-  // Get file path from dropped file (Electron webUtils)
+  // Get file path from dropped file
   getPathForFile: (file) => {
     try { return webUtils.getPathForFile(file); } catch (e) { return null; }
   },
-});
+};
