@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: file:; media-src 'self' file:; script-src 'self' 'unsafe-inline';">
+  <title>Claude Chat</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Sidebar -->
+    <aside id="sidebar">
+      <div style="display:flex;gap:6px;margin-bottom:4px;">
+        <button id="toggle-explorer" class="sidebar-icon-btn" title="Toggle file explorer" style="margin-left:auto;">&#128193;</button>
+      </div>
+      <button id="new-chat-btn" title="New conversation (resets session)">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        New Chat
+      </button>
+
+      <div class="sidebar-section">
+        <label class="sidebar-label">Model</label>
+        <select id="model-select">
+          <option value="opus" selected>Opus</option>
+          <option value="sonnet">Sonnet</option>
+          <option value="haiku">Haiku</option>
+        </select>
+      </div>
+
+      <div class="sidebar-section">
+        <label class="sidebar-label">Working Directory</label>
+        <button id="cwd-btn" class="sidebar-path" title="Click to change"></button>
+      </div>
+
+      <div class="sidebar-section">
+        <label class="sidebar-label">Actions</label>
+        <button id="export-btn" class="sidebar-action">Export as Markdown</button>
+        <button id="capture-btn" class="sidebar-action">Screen Capture</button>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="sidebar-label-row">
+          <label class="sidebar-label">Voice Readback</label>
+          <label class="toggle-switch">
+            <input type="checkbox" id="voice-toggle">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <select id="voice-select">
+          <option value="">Loading voices...</option>
+        </select>
+        <div class="voice-controls hidden" id="voice-controls">
+          <button id="voice-stop" class="sidebar-action">Stop Speaking</button>
+        </div>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="sidebar-label-row">
+          <label class="sidebar-label">Saved Prompts</label>
+          <button id="add-prompt-btn" class="sidebar-icon-btn" title="Add prompt">+</button>
+        </div>
+        <div id="prompts-list"></div>
+      </div>
+
+      <div class="sidebar-spacer"></div>
+
+      <div id="session-info"></div>
+    </aside>
+
+    <!-- Main chat area -->
+    <main id="chat-area">
+      <!-- Search bar (Ctrl+F) -->
+      <div id="search-bar" class="hidden">
+        <input id="search-input" type="text" placeholder="Search messages...">
+        <span id="search-count"></span>
+        <button id="search-close">&times;</button>
+      </div>
+
+      <div id="messages">
+        <div id="welcome" class="welcome">
+          <div class="welcome-icon">C</div>
+          <h2>Claude Chat</h2>
+          <p>Paste images with <kbd>Ctrl+V</kbd>, drag & drop files, or click the attachment button.</p>
+          <p class="subtle">All Claude Code tools and MCP servers are available.</p>
+        </div>
+      </div>
+
+      <!-- Image/file preview strip -->
+      <div id="image-strip" class="hidden"></div>
+
+      <!-- Input area -->
+      <div id="input-area">
+        <div id="input-wrapper">
+          <button id="attach-btn" title="Attach files">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <textarea id="input" placeholder="Message Claude..." rows="1"></textarea>
+          <div id="command-palette" class="hidden"></div>
+          <button id="send-btn" title="Send message">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+        <div class="input-hint">
+          <span id="input-hint-text"><kbd>Enter</kbd> send &middot; <kbd>Shift+Enter</kbd> newline &middot; <kbd>Ctrl+V</kbd> paste images &middot; <kbd>Ctrl+F</kbd> search</span>
+        </div>
+      </div>
+
+      <!-- Status bar -->
+      <div id="status-bar">
+        <span id="status-model"></span>
+        <span id="status-cost"></span>
+        <span id="status-tokens"></span>
+        <span id="status-duration"></span>
+      </div>
+    </main>
+
+    <!-- File Explorer Panel -->
+    <aside id="explorer-panel" class="hidden">
+    <div class="explorer-header">
+      <span class="sidebar-label">FILES</span>
+      <button id="explorer-up" class="sidebar-icon-btn" title="Go up">..</button>
+      <button id="explorer-refresh" class="sidebar-icon-btn" title="Refresh">&#8635;</button>
+      <button id="explorer-close" class="sidebar-icon-btn" title="Close">&times;</button>
+    </div>
+    <div id="explorer-path"></div>
+    <div id="explorer-list"></div>
+    </aside>
+  </div>
+
+  <!-- Config modal -->
+  <div id="config-modal" class="modal hidden">
+    <div class="modal-content config-panel">
+      <div class="config-tabs">
+        <button class="config-tab active" data-tab="claude">Claude Code</button>
+        <button class="config-tab" data-tab="app">App Settings</button>
+      </div>
+
+      <input id="config-search" type="text" class="config-input" placeholder="Search settings..." style="margin-bottom:12px">
+
+      <!-- Claude Code Preferences Tab -->
+      <div id="config-tab-claude" class="config-tab-content">
+        <div id="claude-config-list"></div>
+      </div>
+
+      <!-- App Settings Tab -->
+      <div id="config-tab-app" class="config-tab-content" style="display:none">
+        <div class="config-section">
+          <label class="config-label">Working Directory</label>
+          <div class="config-row">
+            <span id="config-cwd" class="config-value"></span>
+            <button id="config-cwd-btn" class="modal-btn">Change</button>
+          </div>
+        </div>
+
+        <div class="config-section">
+          <label class="config-label">Voice Readback</label>
+          <div class="config-row">
+            <label class="toggle-switch">
+              <input type="checkbox" id="config-voice-toggle">
+              <span class="toggle-slider"></span>
+            </label>
+            <select id="config-voice-select" class="config-input" style="flex:1"></select>
+          </div>
+        </div>
+
+        <div class="config-section">
+          <label class="config-label">TTS Speech Rate</label>
+          <div class="config-row">
+            <input type="range" id="config-speech-rate" min="0.5" max="2.0" step="0.1" value="1.1" class="config-range">
+            <span id="config-rate-label">1.1x</span>
+          </div>
+        </div>
+
+        <div class="config-section">
+          <label class="config-label">Font Size</label>
+          <div class="config-row">
+            <input type="range" id="config-font-size" min="12" max="20" step="1" value="14" class="config-range">
+            <span id="config-font-label">14px</span>
+          </div>
+        </div>
+
+        <div class="config-section">
+          <label class="config-label">Send on Enter</label>
+          <div class="config-row">
+            <label class="toggle-switch">
+              <input type="checkbox" id="config-enter-send" checked>
+              <span class="toggle-slider"></span>
+            </label>
+            <span class="config-hint">Off = Enter for newline, Ctrl+Enter to send</span>
+          </div>
+        </div>
+
+        <div class="config-section">
+          <label class="config-label">Desktop Notifications</label>
+          <label class="toggle-switch">
+            <input type="checkbox" id="config-notifications" checked>
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+
+        <div class="config-section">
+          <label class="config-label">Session</label>
+          <span id="config-session-id" class="config-value" style="font-size:11px;opacity:0.6">No session</span>
+        </div>
+      </div>
+
+      <div class="modal-actions">
+        <button id="config-close" class="modal-btn primary">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Prompt save modal -->
+  <div id="prompt-modal" class="modal hidden">
+    <div class="modal-content">
+      <h3 id="prompt-modal-title">Save Prompt</h3>
+      <input id="prompt-name-input" type="text" placeholder="Prompt name..." maxlength="50">
+      <textarea id="prompt-text-input" placeholder="Prompt text..." rows="6"></textarea>
+      <div class="modal-actions">
+        <button id="prompt-cancel" class="modal-btn">Cancel</button>
+        <button id="prompt-save" class="modal-btn primary">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
