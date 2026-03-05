@@ -671,12 +671,10 @@ window.api.onClaudeEvent((data) => {
         appendThinking(block.thinking, false);
       }
       if (block.type === 'text') {
-        collapseThinking();
         state.currentAssistantText += block.text;
         updateAssistantMessage();
       }
       if (block.type === 'tool_use') {
-        collapseThinking();
         appendToolActivity(block);
       }
     }
@@ -821,17 +819,12 @@ function appendThinking(text, collapsed) {
 }
 
 function collapseThinking() {
-  const allMsgs = messagesEl.querySelectorAll('.message.assistant');
-  const lastMsg = allMsgs[allMsgs.length - 1];
-  if (!lastMsg) return;
-
-  const thinkingBlock = lastMsg.querySelector('.thinking-block');
-  if (thinkingBlock && thinkingBlock.open) {
-    thinkingBlock.open = false;
-    // Remove spinner, add duration
+  // Collapse all thinking blocks in all assistant messages
+  document.querySelectorAll('.thinking-block').forEach(thinkingBlock => {
     const spinner = thinkingBlock.querySelector('.thinking-spinner');
     if (spinner) spinner.remove();
-  }
+    if (thinkingBlock.open) thinkingBlock.open = false;
+  });
 }
 
 function appendToolActivity(block) {
