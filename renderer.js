@@ -664,14 +664,19 @@ window.api.onClaudeEvent((data) => {
     }
   }
 
-  // Assistant content (text + tool use)
+  // Assistant content (text + tool use + thinking)
   if (data.type === 'assistant' && data.message?.content) {
     for (const block of data.message.content) {
+      if (block.type === 'thinking' && block.thinking) {
+        appendThinking(block.thinking, false);
+      }
       if (block.type === 'text') {
+        collapseThinking();
         state.currentAssistantText += block.text;
         updateAssistantMessage();
       }
       if (block.type === 'tool_use') {
+        collapseThinking();
         appendToolActivity(block);
       }
     }
@@ -714,6 +719,7 @@ window.api.onClaudeEvent((data) => {
 
 window.api.onClaudeDone(({ code, sessionId }) => {
   state.isStreaming = false;
+  collapseThinking();
   sendBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
   const now = new Date().toLocaleTimeString();
@@ -782,6 +788,50 @@ function formatToolInput(name, input) {
   if (input.query) return input.query;
   if (input.file_path) return input.file_path.replace(/.*[/\\]/, '');
   return '';
+}
+
+function appendThinking(text, collapsed) {
+  const allMsgs = messagesEl.querySelectorAll('.message.assistant');
+  const lastMsg = allMsgs[allMsgs.length - 1];
+  if (!lastMsg) return;
+
+  // Clear thinking indicator
+  const thinkingEl = lastMsg.querySelector('.thinking-indicator');
+  if (thinkingEl) thinkingEl.remove();
+
+  let thinkingBlock = lastMsg.querySelector('.thinking-block');
+  if (!thinkingBlock) {
+    thinkingBlock = document.createElement('details');
+    thinkingBlock.className = 'thinking-block';
+    thinkingBlock.open = true; // open while streaming
+    const summary = document.createElement('summary');
+    summary.className = 'thinking-summary';
+    summary.innerHTML = '<span class="thinking-label">Thinking</span><span class="thinking-spinner"></span>';
+    thinkingBlock.appendChild(summary);
+    const body = document.createElement('div');
+    body.className = 'thinking-body';
+    thinkingBlock.appendChild(body);
+    const content = lastMsg.querySelector('.message-content');
+    content.parentNode.insertBefore(thinkingBlock, content);
+  }
+
+  const body = thinkingBlock.querySelector('.thinking-body');
+  body.textContent = text;
+  scrollToBottom();
+}
+
+function collapseThinking() {
+  const allMsgs = messagesEl.querySelectorAll('.message.assistant');
+  const lastMsg = allMsgs[allMsgs.length - 1];
+  if (!lastMsg) return;
+
+  const thinkingBlock = lastMsg.querySelector('.thinking-block');
+  if (thinkingBlock && thinkingBlock.open) {
+    thinkingBlock.open = false;
+    // Remove spinner, add duration
+    const spinner = thinkingBlock.querySelector('.thinking-spinner');
+    if (spinner) spinner.remove();
+  }
 }
 
 function appendToolActivity(block) {
