@@ -246,7 +246,7 @@ ipcMain.handle('send-message', async (event, { text, imagePaths, model, cwd }) =
   const useModel = model || currentModel;
   const useCwd = cwd || currentCwd;
 
-  const args = ['-p', '--output-format', 'stream-json', '--model', useModel];
+  const args = ['-p', '--output-format', 'stream-json', '--verbose', '--model', useModel];
   if (sessionId) {
     args.push('--resume', sessionId);
   }
