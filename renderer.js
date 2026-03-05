@@ -851,6 +851,14 @@ const toggleArtifacts = document.getElementById('toggle-artifacts');
 const artifacts = [];
 
 function addArtifact(content, type) {
+  // Deduplicate — skip if the new content is substantially similar to the last artifact
+  if (artifacts.length > 0) {
+    const last = artifacts[artifacts.length - 1];
+    // Compare normalized content (strip whitespace) to catch reformatted duplicates
+    const normalize = (s) => s.replace(/\s+/g, '').slice(0, 500);
+    if (last.type === type && normalize(last.content) === normalize(content)) return;
+  }
+
   const id = 'artifact-' + Date.now();
   const title = type === 'html' ? 'HTML' : 'Code';
   // Try to extract a better title from content
