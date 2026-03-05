@@ -4,7 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 
-const TEMP_DIR = path.join(os.tmpdir(), 'claude-chat-images');
+const TEMP_DIR = path.join(__dirname, 'tmp');
 if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 
 let mainWindow;

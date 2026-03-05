@@ -5,3 +5,4 @@ package-lock.json
 Thumbs.db
 /.code_index
 .claude/
+tmp/
