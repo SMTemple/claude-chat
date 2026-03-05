@@ -664,12 +664,24 @@ window.api.onClaudeEvent((data) => {
     }
   }
 
-  // Assistant text
+  // Assistant content (text + tool use)
   if (data.type === 'assistant' && data.message?.content) {
     for (const block of data.message.content) {
       if (block.type === 'text') {
         state.currentAssistantText += block.text;
         updateAssistantMessage();
+      }
+      if (block.type === 'tool_use') {
+        appendToolActivity(block);
+      }
+    }
+  }
+
+  // Tool results
+  if (data.type === 'user' && data.message?.content) {
+    for (const block of data.message.content) {
+      if (block.type === 'tool_result' || block.tool_use_id) {
+        updateToolResult(block);
       }
     }
   }
@@ -743,6 +755,92 @@ function updateAssistantMessage(override) {
   const text = override || state.currentAssistantText;
   content.innerHTML = window.api.renderMarkdown(text);
   scrollToBottom();
+}
+
+function getToolIcon(name) {
+  const n = name.toLowerCase();
+  if (n === 'read') return '\u{1F4D6}';
+  if (n === 'edit' || n === 'write') return '\u270F\uFE0F';
+  if (n === 'bash') return '\u{1F4BB}';
+  if (n === 'grep') return '\u{1F50D}';
+  if (n === 'glob') return '\u{1F4C1}';
+  if (n.includes('search') || n === 'websearch') return '\u{1F50E}';
+  if (n === 'webfetch') return '\u{1F310}';
+  if (n.startsWith('mcp__')) return '\u{1F50C}';
+  return '\u2699\uFE0F';
+}
+
+function formatToolInput(name, input) {
+  if (!input) return '';
+  const n = name.toLowerCase();
+  if (n === 'read' && input.file_path) return input.file_path.replace(/.*[/\\]/, '');
+  if ((n === 'edit' || n === 'write') && input.file_path) return input.file_path.replace(/.*[/\\]/, '');
+  if (n === 'bash' && input.command) return input.command.length > 60 ? input.command.slice(0, 60) + '...' : input.command;
+  if (n === 'bash' && input.description) return input.description;
+  if (n === 'grep' && input.pattern) return `/${input.pattern}/`;
+  if (n === 'glob' && input.pattern) return input.pattern;
+  if (input.query) return input.query;
+  if (input.file_path) return input.file_path.replace(/.*[/\\]/, '');
+  return '';
+}
+
+function appendToolActivity(block) {
+  const allMsgs = messagesEl.querySelectorAll('.message.assistant');
+  const lastMsg = allMsgs[allMsgs.length - 1];
+  if (!lastMsg) return;
+
+  // Clear thinking indicator
+  const thinkingEl = lastMsg.querySelector('.thinking-indicator');
+  if (thinkingEl) thinkingEl.remove();
+
+  let activityZone = lastMsg.querySelector('.tool-activity');
+  if (!activityZone) {
+    activityZone = document.createElement('div');
+    activityZone.className = 'tool-activity';
+    const content = lastMsg.querySelector('.message-content');
+    content.parentNode.insertBefore(activityZone, content);
+  }
+
+  const item = document.createElement('div');
+  item.className = 'tool-item running';
+  item.dataset.toolId = block.id;
+
+  const icon = getToolIcon(block.name);
+  const detail = formatToolInput(block.name, block.input);
+  const shortName = block.name.replace(/^mcp__[^_]+__/, '');
+
+  item.innerHTML = `<span class="tool-icon">${icon}</span><span class="tool-name">${shortName}</span><span class="tool-detail">${escapeHtml(detail)}</span><span class="tool-spinner"></span>`;
+
+  // Click to expand/collapse input
+  if (block.input) {
+    item.style.cursor = 'pointer';
+    const expanded = document.createElement('pre');
+    expanded.className = 'tool-expanded hidden';
+    expanded.textContent = JSON.stringify(block.input, null, 2);
+    item.appendChild(expanded);
+    item.addEventListener('click', () => expanded.classList.toggle('hidden'));
+  }
+
+  activityZone.appendChild(item);
+  scrollToBottom();
+}
+
+function updateToolResult(block) {
+  const toolId = block.tool_use_id;
+  if (!toolId) return;
+  const item = document.querySelector(`.tool-item[data-tool-id="${toolId}"]`);
+  if (!item) return;
+
+  item.classList.remove('running');
+  item.classList.add('done');
+  const spinner = item.querySelector('.tool-spinner');
+  if (spinner) spinner.remove();
+
+  // Add a checkmark
+  const check = document.createElement('span');
+  check.className = 'tool-check';
+  check.textContent = '\u2713';
+  item.appendChild(check);
 }
 
 // === Command Palette ===
