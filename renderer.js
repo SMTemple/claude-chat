@@ -100,6 +100,7 @@ const state = {
   cwd: '',
   sessionModel: 'opus',
   claudeRunning: false,
+  userHasSent: false,  // suppress chime until first user message
 };
 
 // === DOM refs ===
@@ -217,6 +218,8 @@ function initTerminal() {
 
   // Terminal input → PTY
   term.onData((data) => {
+    // Mark that user has interacted (suppresses startup chime)
+    if (data === '\r' || data === '\n') state.userHasSent = true;
     window.api.ptyInput(data);
   });
 
@@ -224,7 +227,8 @@ function initTerminal() {
   let responseBuffer = '';
   let isResponding = false;
   let responseTimeout = null;
-  let doneNotifyTimeout = null;  // separate debounce for completion chime
+  let doneNotifyTimeout = null;  // silence-based completion detection
+  let hasNotifiedThisResponse = false;
 
   function stripAnsi(str) {
     return str
@@ -374,33 +378,37 @@ function initTerminal() {
     if (plain.includes('●') || plain.includes('⏺')) {
       isResponding = true;
       responseBuffer = '';
-      // Cancel any pending done-notification from a previous partial flush
+      hasNotifiedThisResponse = false;
       if (doneNotifyTimeout) { clearTimeout(doneNotifyTimeout); doneNotifyTimeout = null; }
     }
     if (isResponding) {
       responseBuffer += plain;
-      // Stop buffering when the input prompt returns (response complete)
-      // The ❯ prompt at start of line means Claude finished responding
       if (responseTimeout) clearTimeout(responseTimeout);
       if (plain.includes('❯')) {
         clearTimeout(responseTimeout);
         flushResponseBuffer();
-        // Schedule completion notification — debounce 2s so repeated flushes don't spam
-        if (!doneNotifyTimeout) {
-          doneNotifyTimeout = setTimeout(() => {
-            doneNotifyTimeout = null;
-            playDoneChime();
-            showToast('Response complete', 1500);
-            if (settings.notifications) {
-              window.api.notify('Claude Chat', 'Response complete');
-            }
-          }, 2000);
-        }
       } else {
         responseTimeout = setTimeout(() => {
           flushResponseBuffer();
         }, 800);
       }
+    }
+
+    // Silence-based completion detection: reset on EVERY output chunk.
+    // Only fires after 4s of complete PTY silence following a response.
+    if (isResponding || responseBuffer.length > 0) {
+      if (doneNotifyTimeout) clearTimeout(doneNotifyTimeout);
+      doneNotifyTimeout = setTimeout(() => {
+        doneNotifyTimeout = null;
+        if (!hasNotifiedThisResponse && state.userHasSent) {
+          hasNotifiedThisResponse = true;
+          playDoneChime();
+          showToast('Response complete', 1500);
+          if (settings.notifications) {
+            window.api.notify('Claude Chat', 'Response complete');
+          }
+        }
+      }, 4000);
     }
   });
 
@@ -661,6 +669,7 @@ function sendFromGUI() {
 
   // Write to PTY — collapse multi-line to single line for PTY compatibility,
   // then send Enter separately so Claude Code's TUI processes correctly
+  state.userHasSent = true;
   const singleLine = prompt.replace(/[\r\n]+/g, ' ').trim();
   if (singleLine) {
     window.api.ptyInput(singleLine);
