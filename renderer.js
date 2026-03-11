@@ -224,6 +224,7 @@ function initTerminal() {
   let responseBuffer = '';
   let isResponding = false;
   let responseTimeout = null;
+  let doneNotifyTimeout = null;  // separate debounce for completion chime
 
   function stripAnsi(str) {
     return str
@@ -350,12 +351,6 @@ function initTerminal() {
       addArtifact(a.content, a.type, a.label);
     }
 
-    // 3. Notify user that Claude finished
-    playDoneChime();
-    showToast('Response complete', 1500);
-    if (settings.notifications) {
-      window.api.notify('Claude Chat', 'Response complete');
-    }
   }
 
   // Show loading spinner until Claude Code's prompt is ready
@@ -379,15 +374,28 @@ function initTerminal() {
     if (plain.includes('●') || plain.includes('⏺')) {
       isResponding = true;
       responseBuffer = '';
+      // Cancel any pending done-notification from a previous partial flush
+      if (doneNotifyTimeout) { clearTimeout(doneNotifyTimeout); doneNotifyTimeout = null; }
     }
     if (isResponding) {
       responseBuffer += plain;
       // Stop buffering when the input prompt returns (response complete)
-      // The ❯ or > prompt at start of line means Claude finished responding
+      // The ❯ prompt at start of line means Claude finished responding
       if (responseTimeout) clearTimeout(responseTimeout);
-      if (plain.match(/[❯>]\s*$/) || plain.includes('❯')) {
+      if (plain.includes('❯')) {
         clearTimeout(responseTimeout);
         flushResponseBuffer();
+        // Schedule completion notification — debounce 2s so repeated flushes don't spam
+        if (!doneNotifyTimeout) {
+          doneNotifyTimeout = setTimeout(() => {
+            doneNotifyTimeout = null;
+            playDoneChime();
+            showToast('Response complete', 1500);
+            if (settings.notifications) {
+              window.api.notify('Claude Chat', 'Response complete');
+            }
+          }, 2000);
+        }
       } else {
         responseTimeout = setTimeout(() => {
           flushResponseBuffer();
