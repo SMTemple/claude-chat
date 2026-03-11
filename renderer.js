@@ -811,12 +811,21 @@ newChatBtn.addEventListener('click', async () => {
   if (term) {
     term.clear();
     const dims = { cols: term.cols, rows: term.rows };
-    await window.api.restartClaude(dims);
+    await window.api.restartClaude(dims); // no continueSession = fresh
   }
-  // Clear session artifacts
   artifacts.length = 0;
   renderArtifacts();
   showToast('New conversation');
+});
+
+// === Refresh session (resume with --continue) ===
+document.getElementById('refresh-session-btn').addEventListener('click', async () => {
+  if (term) {
+    term.clear();
+    const dims = { cols: term.cols, rows: term.rows, continueSession: true };
+    await window.api.restartClaude(dims);
+  }
+  showToast('Resuming session...');
 });
 
 // === Export terminal ===

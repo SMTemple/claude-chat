@@ -197,8 +197,8 @@ ipcMain.handle('resize-pty', (_event, { cols, rows }) => {
   return true;
 });
 
-ipcMain.handle('restart-claude', (_event, { cols, rows }) => {
-  spawnClaude(cols, rows, false); // New Chat = fresh session, no --continue
+ipcMain.handle('restart-claude', (_event, { cols, rows, continueSession }) => {
+  spawnClaude(cols, rows, !!continueSession);
   return true;
 });
 

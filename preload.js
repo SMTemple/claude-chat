@@ -11,7 +11,7 @@ window.api = {
   startClaude: (opts) => ipcRenderer.invoke('start-claude', opts),
   ptyInput: (data) => ipcRenderer.invoke('pty-input', data),
   resizePty: (cols, rows) => ipcRenderer.invoke('resize-pty', { cols, rows }),
-  restartClaude: (opts) => ipcRenderer.invoke('restart-claude', opts),
+  restartClaude: (opts) => ipcRenderer.invoke('restart-claude', opts),  // opts: { cols, rows, continueSession? }
   onPtyOutput: (cb) => ipcRenderer.on('pty-output', (_e, data) => cb(data)),
   onPtyExit: (cb) => ipcRenderer.on('pty-exit', (_e, code) => cb(code)),
 

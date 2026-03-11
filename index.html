@@ -95,10 +95,13 @@
         <button id="toggle-explorer" class="sidebar-icon-btn" title="Toggle file explorer" style="margin-left:auto;">&#128193;</button>
         <button id="toggle-artifacts" class="sidebar-icon-btn" title="Toggle artifacts panel">&#128640;</button>
       </div>
-      <button id="new-chat-btn" title="New conversation (restarts Claude)">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-        New Chat
-      </button>
+      <div style="display:flex;gap:6px;">
+        <button id="new-chat-btn" title="New conversation (fresh session)" style="flex:1;">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          New Chat
+        </button>
+        <button id="refresh-session-btn" class="sidebar-icon-btn" title="Refresh session (resume last conversation)" style="padding:8px 10px;font-size:14px;">&#8635;</button>
+      </div>
 
       <div class="sidebar-section">
         <label class="sidebar-label">Model</label>
