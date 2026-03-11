@@ -437,8 +437,8 @@ async function startClaude() {
   state.claudeRunning = true;
   sessionInfo.textContent = 'Starting Claude...';
   const dims = term ? { cols: term.cols, rows: term.rows } : { cols: 120, rows: 30 };
-  await window.api.startClaude({ ...dims, continueSession: true });
-  sessionInfo.textContent = 'Claude running (continued)';
+  await window.api.startClaude(dims);
+  sessionInfo.textContent = 'Claude running';
 }
 
 // === Init on load (if setup already done) ===
@@ -811,21 +811,11 @@ newChatBtn.addEventListener('click', async () => {
   if (term) {
     term.clear();
     const dims = { cols: term.cols, rows: term.rows };
-    await window.api.restartClaude(dims); // no continueSession = fresh
+    await window.api.restartClaude(dims);
   }
   artifacts.length = 0;
   renderArtifacts();
   showToast('New conversation');
-});
-
-// === Refresh session (resume with --continue) ===
-document.getElementById('refresh-session-btn').addEventListener('click', async () => {
-  if (term) {
-    term.clear();
-    const dims = { cols: term.cols, rows: term.rows, continueSession: true };
-    await window.api.restartClaude(dims);
-  }
-  showToast('Resuming session...');
 });
 
 // === Export terminal ===

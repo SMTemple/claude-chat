@@ -140,7 +140,7 @@ function gracefulStopPty() {
   });
 }
 
-function doSpawnClaude(cols, rows, continueSession = false) {
+function doSpawnClaude(cols, rows) {
   const env = { ...process.env };
   // Remove all Claude Code env vars so the spawned instance runs fresh
   delete env.CLAUDECODE;
@@ -165,7 +165,6 @@ function doSpawnClaude(cols, rows, continueSession = false) {
   }
 
   const args = ['--model', currentModel];
-  if (continueSession) args.push('--continue');
   console.log('[PTY] Spawning claude with args:', args.join(' '), '| cwd:', currentCwd);
 
   ptyProcess = pty.spawn(claudeExe, args, {
@@ -194,13 +193,13 @@ function doSpawnClaude(cols, rows, continueSession = false) {
 }
 
 // Gracefully stop old PTY, then spawn new one
-async function spawnClaude(cols, rows, continueSession = false) {
+async function spawnClaude(cols, rows) {
   await gracefulStopPty();
-  doSpawnClaude(cols, rows, continueSession);
+  doSpawnClaude(cols, rows);
 }
 
-ipcMain.handle('start-claude', async (_event, { cols, rows, continueSession }) => {
-  await spawnClaude(cols, rows, continueSession !== false);
+ipcMain.handle('start-claude', async (_event, { cols, rows }) => {
+  await spawnClaude(cols, rows);
   return true;
 });
 
@@ -216,8 +215,8 @@ ipcMain.handle('resize-pty', (_event, { cols, rows }) => {
   return true;
 });
 
-ipcMain.handle('restart-claude', async (_event, { cols, rows, continueSession }) => {
-  await spawnClaude(cols, rows, !!continueSession);
+ipcMain.handle('restart-claude', async (_event, { cols, rows }) => {
+  await spawnClaude(cols, rows);
   return true;
 });
 
