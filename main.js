@@ -124,7 +124,7 @@ app.on('window-all-closed', () => {
 });
 
 // === PTY Management ===
-function spawnClaude(cols, rows) {
+function spawnClaude(cols, rows, continueSession = false) {
   if (ptyProcess) {
     try { ptyProcess.kill(); } catch (e) {}
     ptyProcess = null;
@@ -150,7 +150,10 @@ function spawnClaude(cols, rows) {
     }
   }
 
-  ptyProcess = pty.spawn(claudeExe, ['--model', currentModel], {
+  const args = ['--model', currentModel];
+  if (continueSession) args.push('--continue');
+
+  ptyProcess = pty.spawn(claudeExe, args, {
     name: 'xterm-256color',
     cols: cols || 120,
     rows: rows || 30,
@@ -176,8 +179,8 @@ function spawnClaude(cols, rows) {
   });
 }
 
-ipcMain.handle('start-claude', (_event, { cols, rows }) => {
-  spawnClaude(cols, rows);
+ipcMain.handle('start-claude', (_event, { cols, rows, continueSession }) => {
+  spawnClaude(cols, rows, continueSession !== false); // default: continue
   return true;
 });
 
@@ -194,7 +197,7 @@ ipcMain.handle('resize-pty', (_event, { cols, rows }) => {
 });
 
 ipcMain.handle('restart-claude', (_event, { cols, rows }) => {
-  spawnClaude(cols, rows);
+  spawnClaude(cols, rows, false); // New Chat = fresh session, no --continue
   return true;
 });
 

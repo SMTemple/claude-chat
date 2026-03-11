@@ -566,6 +566,13 @@ kbd {
   font-size: 10px; color: var(--text-muted); text-transform: uppercase;
   letter-spacing: 0.5px; flex-shrink: 0;
 }
+.artifact-card-delete {
+  background: none; border: none; color: var(--text-muted); cursor: pointer;
+  font-size: 14px; padding: 0 2px; line-height: 1; flex-shrink: 0;
+  opacity: 0; transition: opacity 0.15s, color 0.15s;
+}
+.artifact-card:hover .artifact-card-delete { opacity: 1; }
+.artifact-card-delete:hover { color: var(--danger); }
 .artifact-card-chevron {
   font-size: 10px; color: var(--text-muted); transition: transform 0.2s; flex-shrink: 0;
 }

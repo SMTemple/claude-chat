@@ -102,8 +102,9 @@ const state = {
   claudeRunning: false,
 };
 
-// Completion chime — armed by user send, fires once after 4s PTY silence
+// Completion chime — armed by GUI send, fires once after 5s PTY silence
 let chimeArmed = false;
+let chimeResponseSeen = false; // true once ●/⏺ detected after send
 
 // === DOM refs ===
 const input = document.getElementById('input');
@@ -220,8 +221,6 @@ function initTerminal() {
 
   // Terminal input → PTY
   term.onData((data) => {
-    // Arm completion chime when user presses Enter in terminal
-    if (data === '\r' || data === '\n') chimeArmed = true;
     window.api.ptyInput(data);
   });
 
@@ -393,19 +392,23 @@ function initTerminal() {
       }
     }
 
-    // Completion chime: armed when user sends, resets on every PTY output,
-    // fires once after 4s of total silence (meaning Claude is truly done).
-    if (chimeArmed) {
+    // Completion chime: armed by GUI send, waits for response start (●/⏺),
+    // then fires once after 5s of total PTY silence.
+    if (chimeArmed && (plain.includes('●') || plain.includes('⏺'))) {
+      chimeResponseSeen = true;
+    }
+    if (chimeArmed && chimeResponseSeen) {
       if (doneNotifyTimeout) clearTimeout(doneNotifyTimeout);
       doneNotifyTimeout = setTimeout(() => {
         doneNotifyTimeout = null;
         chimeArmed = false;
+        chimeResponseSeen = false;
         playDoneChime();
         showToast('Response complete', 1500);
         if (settings.notifications) {
           window.api.notify('Claude Chat', 'Response complete');
         }
-      }, 4000);
+      }, 5000);
     }
   });
 
@@ -667,6 +670,7 @@ function sendFromGUI() {
   // Write to PTY — collapse multi-line to single line for PTY compatibility,
   // then send Enter separately so Claude Code's TUI processes correctly
   chimeArmed = true;
+  chimeResponseSeen = false;
   const singleLine = prompt.replace(/[\r\n]+/g, ' ').trim();
   if (singleLine) {
     window.api.ptyInput(singleLine);
@@ -1069,10 +1073,22 @@ function renderArtifacts() {
         <span class="artifact-card-icon">${icon}</span>
         <span class="artifact-card-title">${escapeHtml(a.label)} #${i + 1}</span>
         <span class="artifact-card-type">${a.type}</span>
+        <button class="artifact-card-delete" title="Delete artifact">&times;</button>
         <span class="artifact-card-chevron">&#9654;</span>
       </div>
       <div class="artifact-card-body"></div>
     `;
+
+    // Delete button
+    card.querySelector('.artifact-card-delete').addEventListener('click', (e) => {
+      e.stopPropagation();
+      const idx = artifacts.findIndex(x => x.id === a.id);
+      if (idx >= 0) {
+        artifacts.splice(idx, 1);
+        renderArtifacts();
+        showToast('Artifact deleted');
+      }
+    });
 
     // Click header to toggle expand/collapse
     const header = card.querySelector('.artifact-card-header');
