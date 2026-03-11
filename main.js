@@ -152,6 +152,7 @@ function spawnClaude(cols, rows, continueSession = false) {
 
   const args = ['--model', currentModel];
   if (continueSession) args.push('--continue');
+  console.log('[PTY] Spawning claude with args:', args.join(' '), '| cwd:', currentCwd);
 
   ptyProcess = pty.spawn(claudeExe, args, {
     name: 'xterm-256color',

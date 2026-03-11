@@ -437,8 +437,8 @@ async function startClaude() {
   state.claudeRunning = true;
   sessionInfo.textContent = 'Starting Claude...';
   const dims = term ? { cols: term.cols, rows: term.rows } : { cols: 120, rows: 30 };
-  await window.api.startClaude(dims);
-  sessionInfo.textContent = 'Claude running';
+  await window.api.startClaude({ ...dims, continueSession: true });
+  sessionInfo.textContent = 'Claude running (continued)';
 }
 
 // === Init on load (if setup already done) ===
