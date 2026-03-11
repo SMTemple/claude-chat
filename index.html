@@ -120,6 +120,7 @@
         <button id="copy-all-btn" class="sidebar-action">Copy All Output</button>
         <button id="capture-btn" class="sidebar-action">Screen Capture</button>
         <button id="config-btn" class="sidebar-action">Settings</button>
+        <button id="debug-test-btn" class="sidebar-action" style="color:var(--warning);">Debug / Test UI</button>
       </div>
 
       <div class="sidebar-section" id="voice-section" style="display:none">
@@ -291,6 +292,30 @@
         <button id="preview-copy-rendered" class="modal-btn">Copy Rendered</button>
         <button id="preview-copy" class="modal-btn primary">Copy Source</button>
         <button id="preview-close" class="modal-btn">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Debug/Test modal -->
+  <div id="debug-modal" class="modal hidden">
+    <div class="modal-content" style="width:520px;max-height:80vh;overflow-y:auto;">
+      <h3>Debug / Test UI</h3>
+      <div id="debug-log" style="background:var(--bg-primary);border:1px solid var(--border);border-radius:6px;padding:10px;font-family:var(--font-mono);font-size:11px;max-height:300px;overflow-y:auto;color:var(--text-secondary);white-space:pre-wrap;"></div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;">
+        <button class="modal-btn debug-action" data-test="toast">Toast</button>
+        <button class="modal-btn debug-action" data-test="artifact-html">HTML Artifact</button>
+        <button class="modal-btn debug-action" data-test="artifact-md">Markdown Artifact</button>
+        <button class="modal-btn debug-action" data-test="artifact-code">Code Artifact</button>
+        <button class="modal-btn debug-action" data-test="preview">Preview Modal</button>
+        <button class="modal-btn debug-action" data-test="copy-all">Copy All</button>
+        <button class="modal-btn debug-action" data-test="select-all">Select All</button>
+        <button class="modal-btn debug-action" data-test="state">Dump State</button>
+        <button class="modal-btn debug-action" data-test="term-info">Terminal Info</button>
+        <button class="modal-btn debug-action" data-test="run-all">Run All Tests</button>
+      </div>
+      <div class="modal-actions" style="margin-top:12px;">
+        <button id="debug-clear-log" class="modal-btn">Clear Log</button>
+        <button id="debug-close" class="modal-btn primary">Close</button>
       </div>
     </div>
   </div>
