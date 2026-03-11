@@ -209,14 +209,86 @@ function initTerminal() {
     return true;
   });
 
-  // Right-click → copy selection
+  // Right-click → context menu with copy + render options
   container.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
     const sel = term.getSelection();
-    if (sel) {
-      e.preventDefault();
+
+    // Remove any existing context menu
+    document.querySelectorAll('.term-context-menu').forEach(m => m.remove());
+
+    if (!sel) return;
+
+    const menu = document.createElement('div');
+    menu.className = 'term-context-menu';
+    menu.style.cssText = `position:fixed;top:${e.clientY}px;left:${e.clientX}px;z-index:10000;
+      background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;
+      padding:4px 0;min-width:180px;box-shadow:0 4px 16px rgba(0,0,0,0.3);font-size:13px;`;
+
+    function addItem(label, icon, onClick) {
+      const item = document.createElement('div');
+      item.style.cssText = `padding:6px 14px;cursor:pointer;display:flex;align-items:center;gap:8px;color:var(--text-primary);`;
+      item.innerHTML = `<span style="width:16px;text-align:center;">${icon}</span>${label}`;
+      item.addEventListener('mouseenter', () => item.style.background = 'var(--bg-hover)');
+      item.addEventListener('mouseleave', () => item.style.background = '');
+      item.addEventListener('click', () => { menu.remove(); onClick(); });
+      menu.appendChild(item);
+    }
+
+    addItem('Copy', '&#128203;', () => {
       navigator.clipboard.writeText(sel);
       showToast('Copied to clipboard');
+    });
+
+    // Divider
+    const divider = document.createElement('div');
+    divider.style.cssText = 'height:1px;background:var(--border);margin:4px 0;';
+    menu.appendChild(divider);
+
+    // Auto-detect content type for render options
+    const trimmed = sel.trim();
+    const looksHtml = /<!DOCTYPE|<html|<head|<body|<div|<section|<main|<p\b|<h[1-6]\b/i.test(trimmed);
+    const looksMd = /^#{1,6}\s|\*\*|^\s*[-*]\s|^\s*\d+\.\s|```/m.test(trimmed);
+
+    if (looksHtml) {
+      addItem('Render as HTML', '&#127760;', () => openPreviewModal(trimmed, 'html'));
     }
+    if (looksMd) {
+      addItem('Render as Markdown', '&#128196;', () => openPreviewModal(trimmed, 'markdown'));
+    }
+    addItem('Render as Code', '&#128187;', () => openPreviewModal(trimmed, 'code'));
+
+    // Also allow adding to artifacts panel
+    const divider2 = document.createElement('div');
+    divider2.style.cssText = 'height:1px;background:var(--border);margin:4px 0;';
+    menu.appendChild(divider2);
+
+    if (looksHtml) {
+      addItem('Add as HTML Artifact', '&#128640;', () => { addArtifact(trimmed, 'html', 'Selection'); showToast('HTML artifact added'); });
+    }
+    if (looksMd) {
+      addItem('Add as Markdown Artifact', '&#128640;', () => { addArtifact(trimmed, 'markdown', 'Selection'); showToast('Markdown artifact added'); });
+    }
+    addItem('Add as Code Artifact', '&#128640;', () => { addArtifact(trimmed, 'code', 'Selection'); showToast('Code artifact added'); });
+
+    document.body.appendChild(menu);
+
+    // Keep menu within viewport
+    const rect = menu.getBoundingClientRect();
+    if (rect.right > window.innerWidth) menu.style.left = (window.innerWidth - rect.width - 8) + 'px';
+    if (rect.bottom > window.innerHeight) menu.style.top = (window.innerHeight - rect.height - 8) + 'px';
+
+    // Close on click outside or Escape
+    function closeMenu(ev) {
+      if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('mousedown', closeMenu); }
+    }
+    function closeMenuKey(ev) {
+      if (ev.key === 'Escape') { menu.remove(); document.removeEventListener('keydown', closeMenuKey); }
+    }
+    setTimeout(() => {
+      document.addEventListener('mousedown', closeMenu);
+      document.addEventListener('keydown', closeMenuKey);
+    }, 0);
   });
 
   // Terminal input → PTY
