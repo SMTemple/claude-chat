@@ -165,13 +165,21 @@ function initTerminal() {
 
   fitAddon = new FitAddon();
   term.loadAddon(fitAddon);
-  term.loadAddon(new WebLinksAddon());
+  term.loadAddon(new WebLinksAddon((event, uri) => {
+    window.api.openExternal(uri);
+  }));
 
   term.open(container);
   fitAddon.fit();
 
   // Copy/paste support for terminal
   term.attachCustomKeyEventHandler((e) => {
+    // Ctrl+Shift+A → select all terminal content
+    if (e.ctrlKey && e.shiftKey && e.key === 'A' && e.type === 'keydown') {
+      term.selectAll();
+      showToast('Terminal selected — Ctrl+C to copy');
+      return false;
+    }
     // Ctrl+Shift+C → copy selection
     if (e.ctrlKey && e.shiftKey && e.key === 'C' && e.type === 'keydown') {
       const sel = term.getSelection();
@@ -244,22 +252,80 @@ function initTerminal() {
       .trim();
   }
 
-  function detectContent(text) {
-    // Detect HTML
-    if (text.match(/<\s*(html|div|table|form|section|article|head|body|style|script|ul|ol|nav|header|footer|main|p|h[1-6]|span|a\s|img\s|button|input|!DOCTYPE)/i)) {
-      return 'html';
+  // Extract file content from Write tool output displayed in the terminal.
+  // Format: ● Write(path)\n  ⎿  Wrote N lines to path\n       1 line1\n       2 line2\n...
+  function extractWriteArtifacts(text) {
+    const artifacts = [];
+    const lines = text.split('\n');
+    let i = 0;
+    while (i < lines.length) {
+      const t = lines[i].trim();
+      // Match Write tool header
+      const writeMatch = t.match(/^[●⏺]\s*Write\((.+?)\)/);
+      if (!writeMatch) { i++; continue; }
+      const filePath = writeMatch[1];
+      i++;
+      // Skip the "Wrote N lines" status line
+      while (i < lines.length) {
+        const lt = lines[i].trim();
+        if (lt.match(/^[⎿└]\s*Wrote \d+ lines/)) { i++; break; }
+        if (lt && !lt.match(/^[⎿└]/)) break; // not part of this tool
+        i++;
+      }
+      // Collect numbered content lines (leading spaces + number + optional content)
+      // Empty lines in the file show as just "      18" (number with no trailing content)
+      const contentLines = [];
+      while (i < lines.length) {
+        const line = lines[i];
+        const numMatch = line.match(/^\s+(\d+)(?: (.*))?$/);
+        if (numMatch) {
+          contentLines.push(numMatch[2] || '');
+          i++;
+        } else if (line.trim() === '' && contentLines.length > 0) {
+          // Empty line — peek ahead for more numbered lines before continuing
+          let peek = i + 1;
+          while (peek < lines.length && lines[peek].trim() === '') peek++;
+          if (peek < lines.length && lines[peek].match(/^\s+(\d+)(?: (.*))?$/)) {
+            contentLines.push('');
+            i++;
+          } else {
+            break;
+          }
+        } else {
+          break;
+        }
+      }
+      if (contentLines.length < 3) continue;
+      const content = contentLines.join('\n').trim();
+      // Determine type from file extension
+      const ext = filePath.split('.').pop().toLowerCase();
+      if (ext === 'html' || ext === 'htm') {
+        artifacts.push({ content, type: 'html', label: filePath.split(/[/\\]/).pop() });
+      } else if (ext === 'md' || ext === 'markdown') {
+        artifacts.push({ content, type: 'markdown', label: filePath.split(/[/\\]/).pop() });
+      } else if (['js','ts','jsx','tsx','py','css','json','xml','svg','sh','rb','php','java','c','cpp','go','rs'].includes(ext)) {
+        artifacts.push({ content, type: 'code', label: filePath.split(/[/\\]/).pop() });
+      }
     }
-    // Detect markdown with code fences, headers, or tables
-    if (text.match(/```[\s\S]{20,}```/)) return 'markdown';
-    return null;
+    return artifacts;
   }
 
-  function extractCodeBlocks(text) {
+  // Extract code from markdown fences (```lang ... ```) if Claude uses them in text output
+  function extractCodeFences(text) {
     const blocks = [];
-    const fenceRegex = /```(\w*)\n([\s\S]*?)```/g;
+    const fenceRegex = /```(\w*)\s*\n([\s\S]*?)```/g;
     let match;
     while ((match = fenceRegex.exec(text)) !== null) {
-      blocks.push({ lang: match[1], code: match[2].trim() });
+      const lang = match[1];
+      const code = match[2].trim();
+      if (code.length < 50) continue;
+      if (lang === 'html' && (code.match(/<!DOCTYPE|<html|<head|<body/i) || code.length > 200)) {
+        blocks.push({ content: code, type: 'html', label: 'HTML' });
+      } else if ((lang === 'md' || lang === 'markdown') && code.length > 50) {
+        blocks.push({ content: code, type: 'markdown', label: 'Markdown' });
+      } else if (code.length > 100) {
+        blocks.push({ content: code, type: 'code', label: lang || 'Code' });
+      }
     }
     return blocks;
   }
@@ -271,11 +337,17 @@ function initTerminal() {
     if (!raw.trim()) return;
 
     const clean = cleanResponseText(raw);
-    const contentType = detectContent(clean);
 
+    // 1. Extract artifacts from Write tool output (most reliable source)
+    const writeArtifacts = extractWriteArtifacts(clean);
+    for (const a of writeArtifacts) {
+      addArtifact(a.content, a.type, a.label);
+    }
 
-    if (contentType) {
-      addArtifact(clean, contentType);
+    // 2. Look for code fences in response text (fallback)
+    const fenceArtifacts = extractCodeFences(clean);
+    for (const a of fenceArtifacts) {
+      addArtifact(a.content, a.type, a.label);
     }
   }
 
@@ -371,6 +443,46 @@ function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
+}
+
+// Simple markdown → HTML renderer for preview/artifacts
+function renderMarkdownToHtml(md) {
+  // Protect code blocks first
+  const codeBlocks = [];
+  let html = md.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
+    const idx = codeBlocks.length;
+    codeBlocks.push(`<pre style="background:#1a1a28;padding:12px;border-radius:6px;overflow-x:auto;margin:8px 0;font-family:var(--font-mono);font-size:12px;"><code>${escapeHtml(code.trim())}</code></pre>`);
+    return `\x00CB${idx}\x00`;
+  });
+  // Protect inline code
+  html = html.replace(/`([^`]+)`/g, (_, code) =>
+    `<code style="background:#1a1a28;padding:2px 6px;border-radius:3px;font-size:12px;font-family:var(--font-mono);">${escapeHtml(code)}</code>`
+  );
+  // Headings
+  html = html.replace(/^### (.+)$/gm, '<h3 style="margin:12px 0 6px;font-size:15px;color:#e4e4ed;">$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h2 style="margin:14px 0 8px;font-size:17px;color:#e4e4ed;">$1</h2>');
+  html = html.replace(/^# (.+)$/gm, '<h1 style="margin:16px 0 10px;font-size:20px;color:#e4e4ed;">$1</h1>');
+  // Bold / italic
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '<em>$1</em>');
+  // Unordered lists
+  html = html.replace(/^[\-\*] (.+)$/gm, '<li style="margin-left:20px;">$1</li>');
+  // Ordered lists
+  html = html.replace(/^\d+\. (.+)$/gm, '<li style="margin-left:20px;list-style-type:decimal;">$1</li>');
+  // Links
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" style="color:#818cf8;">$1</a>');
+  // Horizontal rules
+  html = html.replace(/^---+$/gm, '<hr style="border:none;border-top:1px solid #2a2a44;margin:12px 0;">');
+  // Paragraphs (double newline)
+  html = html.replace(/\n\n+/g, '</p><p style="margin:8px 0;">');
+  // Single newlines → <br>
+  html = html.replace(/\n/g, '<br>');
+  html = '<p style="margin:8px 0;">' + html + '</p>';
+  // Restore code blocks
+  codeBlocks.forEach((block, i) => {
+    html = html.replace(`\x00CB${i}\x00`, block);
+  });
+  return html;
 }
 
 // === File icon helper ===
@@ -532,10 +644,11 @@ function sendFromGUI() {
   if (text) parts.push(text);
   const prompt = parts.join(' — ');
 
-  // Write to PTY — send text first, then Enter separately
-  // so Claude Code's TUI processes the submit correctly
-  if (prompt) {
-    window.api.ptyInput(prompt);
+  // Write to PTY — collapse multi-line to single line for PTY compatibility,
+  // then send Enter separately so Claude Code's TUI processes correctly
+  const singleLine = prompt.replace(/[\r\n]+/g, ' ').trim();
+  if (singleLine) {
+    window.api.ptyInput(singleLine);
     setTimeout(() => window.api.ptyInput('\r'), 50);
   }
 
@@ -672,6 +785,22 @@ exportBtn.addEventListener('click', async () => {
   if (path) showToast('Exported!');
 });
 
+// === Copy All Output ===
+const copyAllBtn = document.getElementById('copy-all-btn');
+copyAllBtn.addEventListener('click', () => {
+  if (!term) { showToast('No terminal'); return; }
+  const buffer = term.buffer.active;
+  let text = '';
+  for (let i = 0; i < buffer.length; i++) {
+    const line = buffer.getLine(i);
+    if (line) text += line.translateToString(true) + '\n';
+  }
+  text = text.trimEnd();
+  if (!text) { showToast('Nothing to copy'); return; }
+  navigator.clipboard.writeText(text);
+  showToast('All output copied to clipboard');
+});
+
 // === Screen capture ===
 captureBtn.addEventListener('click', async () => {
   const result = await window.api.screenCapture();
@@ -711,13 +840,14 @@ async function renderPrompts() {
         <button class="prompt-item-btn del" data-id="${p.id}" title="Delete">&times;</button>
       </span>
     `;
-    // Click to send to terminal
+    // Click to insert into input field (user can review/edit before sending)
     div.addEventListener('click', (e) => {
       if (e.target.closest('.prompt-item-btn')) return;
-      window.api.ptyInput(p.text);
-      setTimeout(() => window.api.ptyInput('\r'), 50);
-      if (term) term.focus();
-      showToast(`Sent: ${p.name}`);
+      input.value = p.text;
+      input.style.height = 'auto';
+      input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+      input.focus();
+      showToast(`Loaded: ${p.name}`);
     });
     promptsList.appendChild(div);
   }
@@ -850,7 +980,7 @@ const artifactsClose = document.getElementById('artifacts-close');
 const toggleArtifacts = document.getElementById('toggle-artifacts');
 const artifacts = [];
 
-function addArtifact(content, type) {
+function addArtifact(content, type, fileLabel) {
   // Deduplicate — skip if the new content is substantially similar to the last artifact
   if (artifacts.length > 0) {
     const last = artifacts[artifacts.length - 1];
@@ -860,10 +990,9 @@ function addArtifact(content, type) {
   }
 
   const id = 'artifact-' + Date.now();
-  const title = type === 'html' ? 'HTML' : 'Code';
-  // Try to extract a better title from content
-  let label = title;
-  if (type === 'html') {
+  // Use file label if provided, otherwise try to extract from content
+  let label = fileLabel || (type === 'html' ? 'HTML' : type === 'markdown' ? 'Markdown' : 'Code');
+  if (type === 'html' && !fileLabel) {
     const titleMatch = content.match(/<title>(.*?)<\/title>/i);
     if (titleMatch) label = titleMatch[1];
   }
@@ -879,7 +1008,7 @@ function renderArtifacts() {
   artifactsList.innerHTML = '';
 
   if (artifacts.length === 0) {
-    artifactsList.innerHTML = '<div id="artifacts-empty">No artifacts yet. Claude\'s HTML and code outputs will appear here.</div>';
+    artifactsList.innerHTML = '<div id="artifacts-empty">No artifacts yet. Claude\'s HTML, markdown, and code outputs will appear here.</div>';
     return;
   }
 
@@ -889,7 +1018,7 @@ function renderArtifacts() {
     card.className = 'artifact-card';
     card.dataset.id = a.id;
 
-    const icon = a.type === 'html' ? '&#127760;' : '&#128196;';
+    const icon = a.type === 'html' ? '&#127760;' : a.type === 'markdown' ? '&#128221;' : '&#128196;';
     card.innerHTML = `
       <div class="artifact-card-header">
         <span class="artifact-card-icon">${icon}</span>
@@ -923,9 +1052,7 @@ function renderArtifactBody(card, artifact) {
   body.dataset.rendered = '1';
 
   if (artifact.type === 'html') {
-    let html = artifact.content;
-    const fenceMatch = html.match(/```(?:html)?\n([\s\S]*?)```/);
-    if (fenceMatch) html = fenceMatch[1].trim();
+    const html = artifact.content;
 
     const iframe = document.createElement('iframe');
     iframe.sandbox = 'allow-same-origin';
@@ -942,18 +1069,39 @@ function renderArtifactBody(card, artifact) {
     });
     actions.querySelector('.open-preview').addEventListener('click', (e) => {
       e.stopPropagation();
+      openPreviewModal(html, artifact.type);
+    });
+    body.appendChild(actions);
+  } else if (artifact.type === 'markdown') {
+    const rendered = document.createElement('div');
+    rendered.style.cssText = 'padding:10px;font-size:13px;color:var(--text-primary);line-height:1.6;';
+    rendered.innerHTML = renderMarkdownToHtml(artifact.content);
+    body.appendChild(rendered);
+
+    const actions = document.createElement('div');
+    actions.className = 'artifact-card-actions';
+    actions.innerHTML = `<button class="copy-src">Copy Source</button><button class="copy-clean">Copy Clean Text</button><button class="open-preview">Open Full Preview</button>`;
+    actions.querySelector('.copy-src').addEventListener('click', (e) => {
+      e.stopPropagation();
+      navigator.clipboard.writeText(artifact.content);
+      showToast('Markdown source copied');
+    });
+    actions.querySelector('.copy-clean').addEventListener('click', (e) => {
+      e.stopPropagation();
+      // Copy rendered text without markdown syntax
+      const tmp = document.createElement('div');
+      tmp.innerHTML = renderMarkdownToHtml(artifact.content);
+      navigator.clipboard.writeText(tmp.innerText);
+      showToast('Clean text copied');
+    });
+    actions.querySelector('.open-preview').addEventListener('click', (e) => {
+      e.stopPropagation();
       openPreviewModal(artifact.content, artifact.type);
     });
     body.appendChild(actions);
   } else {
-    // Markdown/code
-    const blocks = [];
-    const fenceRegex = /```(\w*)\n([\s\S]*?)```/g;
-    let match;
-    while ((match = fenceRegex.exec(artifact.content)) !== null) {
-      blocks.push({ lang: match[1], code: match[2].trim() });
-    }
-    const codeText = blocks.length > 0 ? blocks.map(b => b.code).join('\n\n') : artifact.content;
+    // Code artifact — content is already the extracted code
+    const codeText = artifact.content;
     const pre = document.createElement('pre');
     pre.textContent = codeText.slice(0, 2000) + (codeText.length > 2000 ? '\n...(truncated)' : '');
     body.appendChild(pre);
@@ -1088,8 +1236,13 @@ function openPreviewModal(content, type) {
     previewRendered.appendChild(iframe);
     previewSourceCode.textContent = html;
     previewRawContent = html;
+  } else if (type === 'markdown') {
+    previewTitle.textContent = 'Markdown Preview';
+    previewRendered.innerHTML = `<div style="line-height:1.6;font-size:14px;color:var(--text-primary);">${renderMarkdownToHtml(content)}</div>`;
+    previewSourceCode.textContent = content;
+    previewRawContent = content;
   } else {
-    // Markdown or other — show source, extract code blocks
+    // Code — show source, extract code blocks
     previewTitle.textContent = 'Content Preview';
     const blocks = [];
     const fenceRegex = /```(\w*)\n([\s\S]*?)```/g;

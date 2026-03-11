@@ -242,6 +242,10 @@ ipcMain.handle('export-conversation', async (_event, text) => {
   return null;
 });
 
+ipcMain.handle('open-external', (_event, url) => {
+  shell.openExternal(url);
+});
+
 ipcMain.handle('notify', (_event, { title, body }) => {
   if (Notification.isSupported() && !mainWindow.isFocused()) {
     const n = new Notification({ title, body });

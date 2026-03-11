@@ -51,6 +51,9 @@ window.api = {
   ttsSpeak: (text, voice) => ipcRenderer.invoke('tts-speak', { text, voice }),
   ttsStop: () => ipcRenderer.invoke('tts-stop'),
 
+  // Open URL in default browser
+  openExternal: (url) => ipcRenderer.invoke('open-external', url),
+
   // Get file path from dropped file
   getPathForFile: (file) => {
     try { return webUtils.getPathForFile(file); } catch (e) { return null; }
