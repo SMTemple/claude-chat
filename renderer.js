@@ -100,8 +100,10 @@ const state = {
   cwd: '',
   sessionModel: 'opus',
   claudeRunning: false,
-  userHasSent: false,  // suppress chime until first user message
 };
+
+// Completion chime — armed by user send, fires once after 4s PTY silence
+let chimeArmed = false;
 
 // === DOM refs ===
 const input = document.getElementById('input');
@@ -218,8 +220,8 @@ function initTerminal() {
 
   // Terminal input → PTY
   term.onData((data) => {
-    // Mark that user has interacted (suppresses startup chime)
-    if (data === '\r' || data === '\n') state.userHasSent = true;
+    // Arm completion chime when user presses Enter in terminal
+    if (data === '\r' || data === '\n') chimeArmed = true;
     window.api.ptyInput(data);
   });
 
@@ -227,8 +229,7 @@ function initTerminal() {
   let responseBuffer = '';
   let isResponding = false;
   let responseTimeout = null;
-  let doneNotifyTimeout = null;  // silence-based completion detection
-  let hasNotifiedThisResponse = false;
+  let doneNotifyTimeout = null;
 
   function stripAnsi(str) {
     return str
@@ -378,8 +379,6 @@ function initTerminal() {
     if (plain.includes('●') || plain.includes('⏺')) {
       isResponding = true;
       responseBuffer = '';
-      hasNotifiedThisResponse = false;
-      if (doneNotifyTimeout) { clearTimeout(doneNotifyTimeout); doneNotifyTimeout = null; }
     }
     if (isResponding) {
       responseBuffer += plain;
@@ -394,19 +393,17 @@ function initTerminal() {
       }
     }
 
-    // Silence-based completion detection: reset on EVERY output chunk.
-    // Only fires after 4s of complete PTY silence following a response.
-    if (isResponding || responseBuffer.length > 0) {
+    // Completion chime: armed when user sends, resets on every PTY output,
+    // fires once after 4s of total silence (meaning Claude is truly done).
+    if (chimeArmed) {
       if (doneNotifyTimeout) clearTimeout(doneNotifyTimeout);
       doneNotifyTimeout = setTimeout(() => {
         doneNotifyTimeout = null;
-        if (!hasNotifiedThisResponse && state.userHasSent) {
-          hasNotifiedThisResponse = true;
-          playDoneChime();
-          showToast('Response complete', 1500);
-          if (settings.notifications) {
-            window.api.notify('Claude Chat', 'Response complete');
-          }
+        chimeArmed = false;
+        playDoneChime();
+        showToast('Response complete', 1500);
+        if (settings.notifications) {
+          window.api.notify('Claude Chat', 'Response complete');
         }
       }, 4000);
     }
@@ -669,7 +666,7 @@ function sendFromGUI() {
 
   // Write to PTY — collapse multi-line to single line for PTY compatibility,
   // then send Enter separately so Claude Code's TUI processes correctly
-  state.userHasSent = true;
+  chimeArmed = true;
   const singleLine = prompt.replace(/[\r\n]+/g, ' ').trim();
   if (singleLine) {
     window.api.ptyInput(singleLine);
