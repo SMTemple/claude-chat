@@ -89,14 +89,11 @@ function createWindow() {
 
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (input.control && input.key === 'r') {
-      // Kill PTY silently before reload — suppress exit event
-      if (ptyProcess) {
-        const p = ptyProcess;
-        ptyProcess = null; // null before kill so onExit guard skips the send
-        try { p.kill(); } catch (e) {}
-      }
-      mainWindow.webContents.reloadIgnoringCache();
       event.preventDefault();
+      // Gracefully exit Claude so it saves session state (for --continue)
+      gracefulStopPty().then(() => {
+        mainWindow.webContents.reloadIgnoringCache();
+      });
     }
     if (input.control && input.shift && input.key === 'I') {
       mainWindow.webContents.toggleDevTools();
@@ -124,27 +121,44 @@ app.on('window-all-closed', () => {
 });
 
 // === PTY Management ===
-function spawnClaude(cols, rows, continueSession = false) {
-  if (ptyProcess) {
-    try { ptyProcess.kill(); } catch (e) {}
-    ptyProcess = null;
-  }
 
+// Gracefully stop the current PTY by sending /exit, with force-kill fallback
+function gracefulStopPty() {
+  return new Promise((resolve) => {
+    if (!ptyProcess) return resolve();
+    const p = ptyProcess;
+    ptyProcess = null;
+    let done = false;
+    const finish = () => { if (!done) { done = true; resolve(); } };
+    p.onExit(() => finish());
+    try { p.write('/exit\r'); } catch (e) {}
+    // Fallback: force kill after 2s if /exit didn't work
+    setTimeout(() => {
+      if (!done) { try { p.kill(); } catch (e) {} }
+      finish();
+    }, 2000);
+  });
+}
+
+function doSpawnClaude(cols, rows, continueSession = false) {
   const env = { ...process.env };
+  // Remove all Claude Code env vars so the spawned instance runs fresh
   delete env.CLAUDECODE;
-  // Force color and terminal support
+  delete env.CLAUDE_CODE_ENTRYPOINT;
+  delete env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS;
+  // Also remove any other CLAUDE_ vars that might leak from parent session
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('CLAUDE_') && key !== 'CLAUDE_API_KEY') delete env[key];
+  }
   env.FORCE_COLOR = '1';
   env.TERM = 'xterm-256color';
-  // Suppress false-positive PATH warning (known Claude Code bug on Windows)
   env.DISABLE_INSTALLATION_CHECKS = '1';
 
-  // Resolve claude executable path
   let claudeExe = 'claude';
   const localBin = path.join(os.homedir(), '.local', 'bin');
   if (process.platform === 'win32') {
     const localExe = path.join(localBin, 'claude.exe');
     if (fs.existsSync(localExe)) claudeExe = localExe;
-    // Ensure localBin is in PATH so Claude Code doesn't warn
     if (env.PATH && !env.PATH.includes(localBin)) {
       env.PATH = localBin + ';' + env.PATH;
     }
@@ -170,7 +184,6 @@ function spawnClaude(cols, rows, continueSession = false) {
 
   const thisProcess = ptyProcess;
   ptyProcess.onExit(({ exitCode }) => {
-    // Only send exit event if this is still the active PTY (not a silent reload kill)
     if (ptyProcess === thisProcess) {
       ptyProcess = null;
       if (mainWindow && !mainWindow.isDestroyed()) {
@@ -180,8 +193,14 @@ function spawnClaude(cols, rows, continueSession = false) {
   });
 }
 
-ipcMain.handle('start-claude', (_event, { cols, rows, continueSession }) => {
-  spawnClaude(cols, rows, continueSession !== false); // default: continue
+// Gracefully stop old PTY, then spawn new one
+async function spawnClaude(cols, rows, continueSession = false) {
+  await gracefulStopPty();
+  doSpawnClaude(cols, rows, continueSession);
+}
+
+ipcMain.handle('start-claude', async (_event, { cols, rows, continueSession }) => {
+  await spawnClaude(cols, rows, continueSession !== false);
   return true;
 });
 
@@ -197,8 +216,8 @@ ipcMain.handle('resize-pty', (_event, { cols, rows }) => {
   return true;
 });
 
-ipcMain.handle('restart-claude', (_event, { cols, rows, continueSession }) => {
-  spawnClaude(cols, rows, !!continueSession);
+ipcMain.handle('restart-claude', async (_event, { cols, rows, continueSession }) => {
+  await spawnClaude(cols, rows, !!continueSession);
   return true;
 });
 
