@@ -349,6 +349,13 @@ function initTerminal() {
     for (const a of fenceArtifacts) {
       addArtifact(a.content, a.type, a.label);
     }
+
+    // 3. Notify user that Claude finished
+    playDoneChime();
+    showToast('Response complete', 1500);
+    if (settings.notifications) {
+      window.api.notify('Claude Chat', 'Response complete');
+    }
   }
 
   // Show loading spinner until Claude Code's prompt is ready
@@ -684,7 +691,31 @@ const settings = {
   enterSend: localStorage.getItem('claude-chat-enter-send') !== 'false',
   notifications: localStorage.getItem('claude-chat-notifications') !== 'false',
   fontSize: parseInt(localStorage.getItem('claude-chat-font-size') || '14'),
+  doneChime: localStorage.getItem('claude-chat-done-chime') !== 'false', // on by default
 };
+
+// === Completion chime (Web Audio API) ===
+let audioCtx = null;
+function playDoneChime() {
+  if (!settings.doneChime) return;
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const now = audioCtx.currentTime;
+    // Two-tone chime: C5 → E5
+    [523.25, 659.25].forEach((freq, i) => {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.15, now + i * 0.12);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.12 + 0.3);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start(now + i * 0.12);
+      osc.stop(now + i * 0.12 + 0.35);
+    });
+  } catch (e) { /* audio not available */ }
+}
 
 // === Input handling ===
 input.addEventListener('keydown', (e) => {
@@ -1376,6 +1407,7 @@ async function openConfig() {
   configFontLabel.textContent = settings.fontSize + 'px';
   configEnterSend.checked = settings.enterSend;
   configNotifications.checked = settings.notifications;
+  document.getElementById('config-done-chime').checked = settings.doneChime;
   configSearch.value = '';
   // Reload voices if sidebar has none yet
   if (voiceSelect.options.length <= 1 && voiceSelect.value === '') {
@@ -1414,6 +1446,8 @@ configClose.addEventListener('click', () => {
   localStorage.setItem('claude-chat-enter-send', settings.enterSend);
   settings.notifications = configNotifications.checked;
   localStorage.setItem('claude-chat-notifications', settings.notifications);
+  settings.doneChime = document.getElementById('config-done-chime').checked;
+  localStorage.setItem('claude-chat-done-chime', settings.doneChime);
   configModal.classList.add('hidden');
   showToast('Settings saved');
 });
@@ -1523,9 +1557,14 @@ const debugTests = {
     dlogPass('Terminal info retrieved');
   },
 
+  chime() {
+    playDoneChime();
+    dlogPass('Completion chime played');
+  },
+
   'run-all'() {
     dlog('--- Running all tests ---');
-    const testOrder = ['toast', 'state', 'term-info', 'select-all', 'copy-all', 'artifact-html', 'artifact-md', 'artifact-code'];
+    const testOrder = ['toast', 'chime', 'state', 'term-info', 'select-all', 'copy-all', 'artifact-html', 'artifact-md', 'artifact-code'];
     let i = 0;
     function next() {
       if (i >= testOrder.length) { dlog('--- All tests complete ---'); return; }

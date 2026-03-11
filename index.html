@@ -256,6 +256,16 @@
             <span class="toggle-slider"></span>
           </label>
         </div>
+        <div class="config-section">
+          <label class="config-label">Completion Chime</label>
+          <div class="config-row">
+            <label class="toggle-switch">
+              <input type="checkbox" id="config-done-chime" checked>
+              <span class="toggle-slider"></span>
+            </label>
+            <span class="config-hint">Play a sound + toast when Claude finishes responding</span>
+          </div>
+        </div>
       </div>
       <div class="modal-actions">
         <button id="config-close" class="modal-btn primary">Done</button>
@@ -303,6 +313,7 @@
       <div id="debug-log" style="background:var(--bg-primary);border:1px solid var(--border);border-radius:6px;padding:10px;font-family:var(--font-mono);font-size:11px;max-height:300px;overflow-y:auto;color:var(--text-secondary);white-space:pre-wrap;"></div>
       <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;">
         <button class="modal-btn debug-action" data-test="toast">Toast</button>
+        <button class="modal-btn debug-action" data-test="chime">Chime</button>
         <button class="modal-btn debug-action" data-test="artifact-html">HTML Artifact</button>
         <button class="modal-btn debug-action" data-test="artifact-md">Markdown Artifact</button>
         <button class="modal-btn debug-action" data-test="artifact-code">Code Artifact</button>
