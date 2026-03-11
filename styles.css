@@ -73,6 +73,27 @@ html, body {
   border-color: var(--accent);
 }
 
+#refresh-session-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: #22c55e18;
+  color: #6ee7a0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.15s;
+}
+
+#refresh-session-btn:hover {
+  background: var(--success);
+  color: #0d0d14;
+  border-color: var(--success);
+}
+
 .sidebar-section { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
 
 .sidebar-label {
