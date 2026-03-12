@@ -190,8 +190,8 @@ function initTerminal() {
       if (sel) navigator.clipboard.writeText(sel);
       return false;
     }
-    // Ctrl+Shift+V → paste from clipboard
-    if (e.ctrlKey && e.shiftKey && e.key === 'V' && e.type === 'keydown') {
+    // Ctrl+Shift+V or Ctrl+V → paste from clipboard
+    if (e.ctrlKey && (e.key === 'v' || e.key === 'V') && e.type === 'keydown') {
       navigator.clipboard.readText().then(text => {
         if (text) window.api.ptyInput(text);
       });
@@ -740,13 +740,16 @@ function sendFromGUI() {
   const prompt = parts.join(' — ');
 
   // Write to PTY — collapse multi-line to single line for PTY compatibility,
-  // then send Enter separately so Claude Code's TUI processes correctly
+  // then send Enter separately so Claude Code's TUI processes correctly.
+  // Claude Code may detect bulk ptyInput as a paste ("[Pasted text #1]"),
+  // requiring a second Enter: first accepts the paste, second submits it.
   chimeArmed = true;
   chimeResponseSeen = false;
   const singleLine = prompt.replace(/[\r\n]+/g, ' ').trim();
   if (singleLine) {
     window.api.ptyInput(singleLine);
     setTimeout(() => window.api.ptyInput('\r'), 50);
+    setTimeout(() => window.api.ptyInput('\r'), 200);
   }
 
   // Clear
