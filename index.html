@@ -2,8 +2,9 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: file:; media-src 'self' file:; script-src 'self' 'unsafe-inline';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: file:; media-src 'self' file:; script-src 'self' 'unsafe-inline';">
   <title>Claude Chat</title>
+  <link rel="stylesheet" href="./node_modules/@fortawesome/fontawesome-free/css/all.min.css">
   <link rel="stylesheet" href="./node_modules/@xterm/xterm/css/xterm.css">
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -92,11 +93,11 @@
     <!-- Sidebar -->
     <aside id="sidebar">
       <div style="display:flex;gap:6px;margin-bottom:4px;">
-        <button id="toggle-explorer" class="sidebar-icon-btn" title="Toggle file explorer" style="margin-left:auto;">&#128193;</button>
-        <button id="toggle-artifacts" class="sidebar-icon-btn" title="Toggle artifacts panel">&#128640;</button>
+        <button id="toggle-explorer" class="sidebar-icon-btn" title="Toggle file explorer" style="margin-left:auto;"><i class="fa-regular fa-folder"></i></button>
+        <button id="toggle-artifacts" class="sidebar-icon-btn" title="Toggle artifacts panel"><i class="fa-solid fa-cube"></i></button>
       </div>
       <button id="new-chat-btn" title="New conversation (fresh session)">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        <i class="fa-solid fa-plus"></i>
         New Chat
       </button>
 
@@ -142,7 +143,7 @@
       <div class="sidebar-section">
         <div class="sidebar-label-row">
           <label class="sidebar-label">Saved Prompts</label>
-          <button id="add-prompt-btn" class="sidebar-icon-btn" title="Add prompt">+</button>
+          <button id="add-prompt-btn" class="sidebar-icon-btn" title="Add prompt"><i class="fa-solid fa-plus"></i></button>
         </div>
         <div id="prompts-list"></div>
       </div>
@@ -166,11 +167,11 @@
       <div id="input-area">
         <div id="input-wrapper">
           <button id="attach-btn" title="Attach files">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <i class="fa-solid fa-paperclip"></i>
           </button>
           <textarea id="input" placeholder="Type here or directly in the terminal..." rows="1"></textarea>
           <button id="send-btn" title="Send to terminal">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <i class="fa-solid fa-paper-plane"></i>
           </button>
         </div>
         <div class="input-hint">
@@ -183,9 +184,9 @@
     <aside id="explorer-panel" class="hidden">
       <div class="explorer-header">
         <span class="sidebar-label">FILES</span>
-        <button id="explorer-up" class="sidebar-icon-btn" title="Go up">..</button>
-        <button id="explorer-refresh" class="sidebar-icon-btn" title="Refresh">&#8635;</button>
-        <button id="explorer-close" class="sidebar-icon-btn" title="Close">&times;</button>
+        <button id="explorer-up" class="sidebar-icon-btn" title="Go up"><i class="fa-solid fa-level-up-alt"></i></button>
+        <button id="explorer-refresh" class="sidebar-icon-btn" title="Refresh"><i class="fa-solid fa-arrows-rotate"></i></button>
+        <button id="explorer-close" class="sidebar-icon-btn" title="Close"><i class="fa-solid fa-xmark"></i></button>
       </div>
       <div id="explorer-path"></div>
       <div id="explorer-list"></div>
@@ -196,8 +197,8 @@
       <div class="artifacts-header">
         <span class="sidebar-label">ARTIFACTS</span>
         <span id="artifacts-count" class="artifacts-badge">0</span>
-        <button id="artifacts-clear" class="sidebar-icon-btn" title="Clear all">&#128465;</button>
-        <button id="artifacts-close" class="sidebar-icon-btn" title="Close">&times;</button>
+        <button id="artifacts-clear" class="sidebar-icon-btn" title="Clear all"><i class="fa-regular fa-trash-can"></i></button>
+        <button id="artifacts-close" class="sidebar-icon-btn" title="Close"><i class="fa-solid fa-xmark"></i></button>
       </div>
       <div id="artifacts-list"></div>
     </aside>

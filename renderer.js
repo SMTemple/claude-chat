@@ -228,14 +228,14 @@ function initTerminal() {
     function addItem(label, icon, onClick) {
       const item = document.createElement('div');
       item.style.cssText = `padding:6px 14px;cursor:pointer;display:flex;align-items:center;gap:8px;color:var(--text-primary);`;
-      item.innerHTML = `<span style="width:16px;text-align:center;">${icon}</span>${label}`;
+      item.innerHTML = `<span style="width:16px;text-align:center;font-size:13px;">${icon}</span>${label}`;
       item.addEventListener('mouseenter', () => item.style.background = 'var(--bg-hover)');
       item.addEventListener('mouseleave', () => item.style.background = '');
       item.addEventListener('click', () => { menu.remove(); onClick(); });
       menu.appendChild(item);
     }
 
-    addItem('Copy', '&#128203;', () => {
+    addItem('Copy', '<i class="fa-regular fa-clipboard"></i>', () => {
       navigator.clipboard.writeText(sel);
       showToast('Copied to clipboard');
     });
@@ -251,12 +251,12 @@ function initTerminal() {
     const looksMd = /^#{1,6}\s|\*\*|^\s*[-*]\s|^\s*\d+\.\s|```/m.test(trimmed);
 
     if (looksHtml) {
-      addItem('Render as HTML', '&#127760;', () => openPreviewModal(trimmed, 'html'));
+      addItem('Render as HTML', '<i class="fa-solid fa-globe"></i>', () => openPreviewModal(trimmed, 'html'));
     }
     if (looksMd) {
-      addItem('Render as Markdown', '&#128196;', () => openPreviewModal(trimmed, 'markdown'));
+      addItem('Render as Markdown', '<i class="fa-regular fa-file-lines"></i>', () => openPreviewModal(trimmed, 'markdown'));
     }
-    addItem('Render as Code', '&#128187;', () => openPreviewModal(trimmed, 'code'));
+    addItem('Render as Code', '<i class="fa-solid fa-code"></i>', () => openPreviewModal(trimmed, 'code'));
 
     // Also allow adding to artifacts panel
     const divider2 = document.createElement('div');
@@ -264,12 +264,12 @@ function initTerminal() {
     menu.appendChild(divider2);
 
     if (looksHtml) {
-      addItem('Add as HTML Artifact', '&#128640;', () => { addArtifact(trimmed, 'html', 'Selection'); showToast('HTML artifact added'); });
+      addItem('Add as HTML Artifact', '<i class="fa-solid fa-cube"></i>', () => { addArtifact(trimmed, 'html', 'Selection'); showToast('HTML artifact added'); });
     }
     if (looksMd) {
-      addItem('Add as Markdown Artifact', '&#128640;', () => { addArtifact(trimmed, 'markdown', 'Selection'); showToast('Markdown artifact added'); });
+      addItem('Add as Markdown Artifact', '<i class="fa-solid fa-cube"></i>', () => { addArtifact(trimmed, 'markdown', 'Selection'); showToast('Markdown artifact added'); });
     }
-    addItem('Add as Code Artifact', '&#128640;', () => { addArtifact(trimmed, 'code', 'Selection'); showToast('Code artifact added'); });
+    addItem('Add as Code Artifact', '<i class="fa-solid fa-cube"></i>', () => { addArtifact(trimmed, 'code', 'Selection'); showToast('Code artifact added'); });
 
     document.body.appendChild(menu);
 
@@ -584,11 +584,17 @@ function renderMarkdownToHtml(md) {
 function fileIcon(name) {
   const ext = (name.split('.').pop() || '').toLowerCase();
   const icons = {
-    pdf: '\u{1F4C4}', doc: '\u{1F4DD}', docx: '\u{1F4DD}', xls: '\u{1F4CA}', xlsx: '\u{1F4CA}',
-    csv: '\u{1F4CA}', txt: '\u{1F4C3}', json: '\u{2699}', js: '\u{2699}', ts: '\u{2699}',
-    py: '\u{1F40D}', html: '\u{1F310}', css: '\u{1F3A8}', zip: '\u{1F4E6}', rar: '\u{1F4E6}',
+    pdf: '<i class="fa-regular fa-file-pdf"></i>',
+    doc: '<i class="fa-regular fa-file-word"></i>', docx: '<i class="fa-regular fa-file-word"></i>',
+    xls: '<i class="fa-regular fa-file-excel"></i>', xlsx: '<i class="fa-regular fa-file-excel"></i>',
+    csv: '<i class="fa-regular fa-file-excel"></i>',
+    txt: '<i class="fa-regular fa-file-lines"></i>',
+    json: '<i class="fa-solid fa-gear"></i>', js: '<i class="fa-solid fa-gear"></i>', ts: '<i class="fa-solid fa-gear"></i>',
+    py: '<i class="fa-solid fa-gear"></i>',
+    html: '<i class="fa-solid fa-globe"></i>', css: '<i class="fa-solid fa-palette"></i>',
+    zip: '<i class="fa-regular fa-file-zipper"></i>', rar: '<i class="fa-regular fa-file-zipper"></i>',
   };
-  return icons[ext] || '\u{1F4CE}';
+  return icons[ext] || '<i class="fa-regular fa-file"></i>';
 }
 
 // === Image/File handling ===
@@ -612,14 +618,14 @@ function renderImageStrip() {
   state.pendingImages.forEach((img, i) => {
     const div = document.createElement('div');
     div.className = 'image-preview';
-    div.innerHTML = `<img src="${img.dataURL}"><button class="remove-img" data-type="image" data-index="${i}">&times;</button>`;
+    div.innerHTML = `<img src="${img.dataURL}"><button class="remove-img" data-type="image" data-index="${i}"><i class="fa-solid fa-xmark"></i></button>`;
     imageStrip.appendChild(div);
   });
 
   state.pendingFiles.forEach((file, i) => {
     const div = document.createElement('div');
     div.className = 'image-preview';
-    div.innerHTML = `<div class="file-preview-tag"><span title="${escapeHtml(file.name)}">${fileIcon(file.name)} ${escapeHtml(file.name)}</span></div><button class="remove-img" data-type="file" data-index="${i}">&times;</button>`;
+    div.innerHTML = `<div class="file-preview-tag"><span title="${escapeHtml(file.name)}">${fileIcon(file.name)} ${escapeHtml(file.name)}</span></div><button class="remove-img" data-type="file" data-index="${i}"><i class="fa-solid fa-xmark"></i></button>`;
     imageStrip.appendChild(div);
   });
 
@@ -959,8 +965,8 @@ async function renderPrompts() {
     div.innerHTML = `
       <span class="prompt-item-name">${escapeHtml(p.name)}</span>
       <span class="prompt-item-actions">
-        <button class="prompt-item-btn edit" data-id="${p.id}" title="Edit">&#9998;</button>
-        <button class="prompt-item-btn del" data-id="${p.id}" title="Delete">&times;</button>
+        <button class="prompt-item-btn edit" data-id="${p.id}" title="Edit"><i class="fa-solid fa-pen"></i></button>
+        <button class="prompt-item-btn del" data-id="${p.id}" title="Delete"><i class="fa-solid fa-xmark"></i></button>
       </span>
     `;
     // Click to insert into input field (user can review/edit before sending)
@@ -1059,7 +1065,7 @@ async function loadExplorer(dirPath) {
   for (const entry of result.entries) {
     const div = document.createElement('div');
     div.className = `explorer-item${entry.isDir ? ' dir' : ''}`;
-    div.innerHTML = `<span class="explorer-item-icon">${entry.isDir ? '\u{1F4C1}' : fileIcon(entry.name)}</span>${escapeHtml(entry.name)}`;
+    div.innerHTML = `<span class="explorer-item-icon">${entry.isDir ? '<i class="fa-solid fa-folder"></i>' : fileIcon(entry.name)}</span>${escapeHtml(entry.name)}`;
     div.title = entry.path;
 
     div.addEventListener('click', () => {
@@ -1141,14 +1147,14 @@ function renderArtifacts() {
     card.className = 'artifact-card';
     card.dataset.id = a.id;
 
-    const icon = a.type === 'html' ? '&#127760;' : a.type === 'markdown' ? '&#128221;' : '&#128196;';
+    const icon = a.type === 'html' ? '<i class="fa-solid fa-globe"></i>' : a.type === 'markdown' ? '<i class="fa-regular fa-file-lines"></i>' : '<i class="fa-solid fa-code"></i>';
     card.innerHTML = `
       <div class="artifact-card-header">
         <span class="artifact-card-icon">${icon}</span>
         <span class="artifact-card-title">${escapeHtml(a.label)} #${i + 1}</span>
         <span class="artifact-card-type">${a.type}</span>
-        <button class="artifact-card-delete" title="Delete artifact">&times;</button>
-        <span class="artifact-card-chevron">&#9654;</span>
+        <button class="artifact-card-delete" title="Delete artifact"><i class="fa-solid fa-xmark"></i></button>
+        <span class="artifact-card-chevron"><i class="fa-solid fa-chevron-right"></i></span>
       </div>
       <div class="artifact-card-body"></div>
     `;
@@ -1311,10 +1317,10 @@ async function loadTTSVoices() {
   for (const v of sorted) {
     const opt = document.createElement('option');
     opt.value = v.name;
-    const flag = v.locale.includes('AU') ? '\u{1F1E6}\u{1F1FA}' :
-                 v.locale.includes('GB') ? '\u{1F1EC}\u{1F1E7}' :
-                 v.locale.includes('US') ? '\u{1F1FA}\u{1F1F8}' : '';
-    opt.textContent = `${flag} ${v.friendly}`;
+    const tag = v.locale.includes('AU') ? '[AU]' :
+                v.locale.includes('GB') ? '[GB]' :
+                v.locale.includes('US') ? '[US]' : '';
+    opt.textContent = `${tag} ${v.friendly}`;
     voiceSelect.appendChild(opt);
   }
 

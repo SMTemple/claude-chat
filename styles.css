@@ -278,7 +278,8 @@ kbd {
 .sidebar-icon-btn {
   background: var(--bg-tertiary); border: 1px solid var(--border);
   border-radius: 4px; color: var(--text-secondary); cursor: pointer;
-  font-size: 13px; padding: 2px 7px; line-height: 1.2; transition: all 0.15s;
+  font-size: 13px; padding: 4px 7px; line-height: 1; transition: all 0.15s;
+  display: inline-flex; align-items: center; justify-content: center;
 }
 .sidebar-icon-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
 
@@ -466,11 +467,11 @@ kbd {
   font-size: 12px; flex-shrink: 0;
 }
 .wizard-check.pass .wizard-check-icon { background: var(--success); color: white; }
-.wizard-check.pass .wizard-check-icon::after { content: '\2713'; }
+.wizard-check.pass .wizard-check-icon::after { content: '\f00c'; font-family: 'Font Awesome 6 Free'; font-weight: 900; }
 .wizard-check.fail .wizard-check-icon { background: #dc2626; color: white; }
-.wizard-check.fail .wizard-check-icon::after { content: '\2717'; }
+.wizard-check.fail .wizard-check-icon::after { content: '\f00d'; font-family: 'Font Awesome 6 Free'; font-weight: 900; }
 .wizard-check.warn .wizard-check-icon { background: #f59e0b; color: white; }
-.wizard-check.warn .wizard-check-icon::after { content: '!'; }
+.wizard-check.warn .wizard-check-icon::after { content: '\f12a'; font-family: 'Font Awesome 6 Free'; font-weight: 900; }
 .wizard-hint { font-size: 12px; color: var(--text-secondary); margin-top: 8px; line-height: 1.5; }
 
 .wizard-dir-row { display: flex; align-items: center; gap: 10px; }
