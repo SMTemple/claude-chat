@@ -190,7 +190,14 @@ function initTerminal() {
     if (e.ctrlKey && (e.key === 'v' || e.key === 'V') && e.type === 'keydown') {
       e.preventDefault();
       navigator.clipboard.readText().then(text => {
-        if (text) window.api.ptyInput(text);
+        if (!text) return;
+        window.api.ptyInput(text);
+        // Multi-line paste triggers Claude Code's paste detection ("[Pasted text #1]")
+        // which requires Enter to accept, then another Enter to submit
+        if (text.includes('\n') || text.includes('\r')) {
+          setTimeout(() => window.api.ptyInput('\r'), 100);
+          setTimeout(() => window.api.ptyInput('\r'), 300);
+        }
       });
       return false;
     }
@@ -545,6 +552,34 @@ function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
+}
+
+// Strip terminal line numbers, diff markers, and common indentation from code text
+function cleanTerminalCode(text) {
+  let cleaned = text
+    .split('\n')
+    .map(line => {
+      // Strip leading line numbers (e.g. "  42  code here" or "  42\tcode here")
+      const numStrip = line.match(/^\s*\d+[\t ]{1,4}(.*)$/);
+      if (numStrip) {
+        let content = numStrip[1];
+        // Strip diff markers (+/- prefix) from Edit/Update tool output
+        const diffStrip = content.match(/^[+-]\s(.*)$/);
+        if (diffStrip) content = diffStrip[1];
+        return content;
+      }
+      return line;
+    })
+    .join('\n');
+  // Remove common leading whitespace
+  const nonEmpty = cleaned.split('\n').filter(l => l.trim());
+  if (nonEmpty.length > 0) {
+    const minIndent = Math.min(...nonEmpty.map(l => l.match(/^(\s*)/)[1].length));
+    if (minIndent > 0) {
+      cleaned = cleaned.split('\n').map(l => l.slice(minIndent)).join('\n');
+    }
+  }
+  return cleaned.replace(/^\n+|\n+$/g, '');
 }
 
 // Simple markdown → HTML renderer for preview/artifacts
@@ -1249,8 +1284,8 @@ function renderArtifactBody(card, artifact) {
     });
     body.appendChild(actions);
   } else {
-    // Code artifact — content is already the extracted code
-    const codeText = artifact.content;
+    // Code artifact — clean terminal line numbers/diff markers before display
+    const codeText = cleanTerminalCode(artifact.content);
     const pre = document.createElement('pre');
     pre.textContent = codeText.slice(0, 2000) + (codeText.length > 2000 ? '\n...(truncated)' : '');
     body.appendChild(pre);
@@ -1265,7 +1300,7 @@ function renderArtifactBody(card, artifact) {
     });
     actions.querySelector('.open-preview').addEventListener('click', (e) => {
       e.stopPropagation();
-      openPreviewModal(artifact.content, artifact.type);
+      openPreviewModal(codeText, artifact.type);
     });
     body.appendChild(actions);
   }
@@ -1406,24 +1441,8 @@ function openPreviewModal(content, type) {
       previewSourceCode.textContent = blocks.map(b => b.code).join('\n\n');
       previewRawContent = blocks.map(b => b.code).join('\n\n');
     } else {
-      // Clean up terminal artifacts: strip line numbers, common indentation, blank lines
-      let cleaned = content
-        .split('\n')
-        .map(line => {
-          // Strip leading line numbers (e.g. "  42  code here" or "  42\tcode here")
-          const numStrip = line.match(/^\s*\d+[\t ]{1,4}(.*)$/);
-          return numStrip ? numStrip[1] : line;
-        })
-        .join('\n');
-      // Remove common leading whitespace
-      const nonEmpty = cleaned.split('\n').filter(l => l.trim());
-      if (nonEmpty.length > 0) {
-        const minIndent = Math.min(...nonEmpty.map(l => l.match(/^(\s*)/)[1].length));
-        if (minIndent > 0) {
-          cleaned = cleaned.split('\n').map(l => l.slice(minIndent)).join('\n');
-        }
-      }
-      cleaned = cleaned.replace(/^\n+|\n+$/g, '');
+      // Clean up terminal artifacts: strip line numbers, diff markers, common indentation
+      const cleaned = cleanTerminalCode(content);
       previewRendered.innerHTML = `<pre style="background:var(--bg-tertiary);padding:12px;border-radius:6px;overflow-x:auto;font-size:13px;line-height:1.5;"><code>${escapeHtml(cleaned)}</code></pre>`;
       previewSourceCode.textContent = cleaned;
       previewRawContent = cleaned;
