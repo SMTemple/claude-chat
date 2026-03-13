@@ -102,10 +102,6 @@ const state = {
   claudeRunning: false,
 };
 
-// Completion chime — armed by GUI send, fires once after 5s PTY silence
-let chimeArmed = false;
-let chimeResponseSeen = false; // true once ●/⏺ detected after send
-
 // === DOM refs ===
 const input = document.getElementById('input');
 const sendBtn = document.getElementById('send-btn');
@@ -235,7 +231,7 @@ function initTerminal() {
       menu.appendChild(item);
     }
 
-    addItem('Copy', '<i class="fa-regular fa-clipboard"></i>', () => {
+    addItem('Copy', '<i class="fa-regular fa-copy"></i>', () => {
       navigator.clipboard.writeText(sel);
       showToast('Copied to clipboard');
     });
@@ -256,7 +252,7 @@ function initTerminal() {
     if (looksMd) {
       addItem('Render as Markdown', '<i class="fa-regular fa-file-lines"></i>', () => openPreviewModal(trimmed, 'markdown'));
     }
-    addItem('Render as Code', '<i class="fa-solid fa-code"></i>', () => openPreviewModal(trimmed, 'code'));
+    addItem('Render as Code', '<i class="fa-solid fa-terminal"></i>', () => openPreviewModal(trimmed, 'code'));
 
     // Also allow adding to artifacts panel
     const divider2 = document.createElement('div');
@@ -301,6 +297,7 @@ function initTerminal() {
   let isResponding = false;
   let responseTimeout = null;
   let doneNotifyTimeout = null;
+  let doneNotifyArmed = false;
 
   function stripAnsi(str) {
     return str
@@ -351,12 +348,16 @@ function initTerminal() {
       }
       // Collect numbered content lines (leading spaces + number + optional content)
       // Empty lines in the file show as just "      18" (number with no trailing content)
+      // Skip diff-marker lines (+ or -) from Edit/Update tool output that may bleed in
       const contentLines = [];
       while (i < lines.length) {
         const line = lines[i];
         const numMatch = line.match(/^\s+(\d+)(?: (.*))?$/);
         if (numMatch) {
-          contentLines.push(numMatch[2] || '');
+          const lineContent = numMatch[2] || '';
+          // Skip Edit/Update diff markers (e.g. "414 +  code" or "464 -  code")
+          if (/^[+-]\s/.test(lineContent)) { i++; continue; }
+          contentLines.push(lineContent);
           i++;
         } else if (line.trim() === '' && contentLines.length > 0) {
           // Empty line — peek ahead for more numbered lines before continuing
@@ -411,6 +412,7 @@ function initTerminal() {
     const raw = responseBuffer;
     responseBuffer = '';
     isResponding = false;
+    responseTimeout = null;
     if (!raw.trim()) return;
 
     const clean = cleanResponseText(raw);
@@ -448,35 +450,39 @@ function initTerminal() {
     // Buffer response text for content detection
     const plain = stripAnsi(data);
     if (plain.includes('●') || plain.includes('⏺')) {
-      isResponding = true;
-      responseBuffer = '';
+      // Only start a new buffer if we're not already responding.
+      // A single response can contain multiple ●/⏺ markers (one per tool use),
+      // so we must NOT reset the buffer mid-response.
+      if (!isResponding) {
+        isResponding = true;
+        responseBuffer = '';
+      }
     }
     if (isResponding) {
       responseBuffer += plain;
       if (responseTimeout) clearTimeout(responseTimeout);
       if (plain.includes('❯')) {
-        clearTimeout(responseTimeout);
         flushResponseBuffer();
       } else {
+        // Use a longer debounce (3s) to avoid flushing mid-stream.
+        // Claude's API output often has pauses >800ms between chunks,
+        // which previously caused premature partial flushes.
         responseTimeout = setTimeout(() => {
           flushResponseBuffer();
-        }, 800);
+        }, 3000);
       }
     }
 
-    // Completion chime: armed by GUI send, waits for response start (●/⏺),
+    // Response complete notification: armed by GUI send, waits for response start (●/⏺),
     // then fires once after 5s of total PTY silence.
-    if (chimeArmed && (plain.includes('●') || plain.includes('⏺'))) {
-      chimeResponseSeen = true;
+    if (plain.includes('●') || plain.includes('⏺')) {
+      doneNotifyArmed = true;
     }
-    if (chimeArmed && chimeResponseSeen) {
+    if (doneNotifyArmed) {
       if (doneNotifyTimeout) clearTimeout(doneNotifyTimeout);
       doneNotifyTimeout = setTimeout(() => {
         doneNotifyTimeout = null;
-        chimeArmed = false;
-        chimeResponseSeen = false;
-        playDoneChime();
-        showToast('Response complete', 1500);
+        doneNotifyArmed = false;
         if (settings.notifications) {
           window.api.notify('Claude Chat', 'Response complete');
         }
@@ -587,12 +593,18 @@ function fileIcon(name) {
     pdf: '<i class="fa-regular fa-file-pdf"></i>',
     doc: '<i class="fa-regular fa-file-word"></i>', docx: '<i class="fa-regular fa-file-word"></i>',
     xls: '<i class="fa-regular fa-file-excel"></i>', xlsx: '<i class="fa-regular fa-file-excel"></i>',
-    csv: '<i class="fa-regular fa-file-excel"></i>',
+    csv: '<i class="fa-solid fa-table"></i>',
     txt: '<i class="fa-regular fa-file-lines"></i>',
-    json: '<i class="fa-solid fa-gear"></i>', js: '<i class="fa-solid fa-gear"></i>', ts: '<i class="fa-solid fa-gear"></i>',
-    py: '<i class="fa-solid fa-gear"></i>',
-    html: '<i class="fa-solid fa-globe"></i>', css: '<i class="fa-solid fa-palette"></i>',
+    json: '<i class="fa-solid fa-gear"></i>',
+    js: '<i class="fa-brands fa-js"></i>', ts: '<i class="fa-solid fa-code"></i>',
+    jsx: '<i class="fa-brands fa-react"></i>', tsx: '<i class="fa-brands fa-react"></i>',
+    py: '<i class="fa-brands fa-python"></i>',
+    html: '<i class="fa-brands fa-html5"></i>', css: '<i class="fa-brands fa-css3-alt"></i>',
     zip: '<i class="fa-regular fa-file-zipper"></i>', rar: '<i class="fa-regular fa-file-zipper"></i>',
+    md: '<i class="fa-solid fa-heading"></i>',
+    png: '<i class="fa-regular fa-file-image"></i>', jpg: '<i class="fa-regular fa-file-image"></i>',
+    jpeg: '<i class="fa-regular fa-file-image"></i>', gif: '<i class="fa-regular fa-file-image"></i>',
+    svg: '<i class="fa-regular fa-file-image"></i>', webp: '<i class="fa-regular fa-file-image"></i>',
   };
   return icons[ext] || '<i class="fa-regular fa-file"></i>';
 }
@@ -749,8 +761,6 @@ function sendFromGUI() {
   // then send Enter separately so Claude Code's TUI processes correctly.
   // Claude Code may detect bulk ptyInput as a paste ("[Pasted text #1]"),
   // requiring a second Enter: first accepts the paste, second submits it.
-  chimeArmed = true;
-  chimeResponseSeen = false;
   const singleLine = prompt.replace(/[\r\n]+/g, ' ').trim();
   if (singleLine) {
     window.api.ptyInput(singleLine);
@@ -790,31 +800,7 @@ const settings = {
   enterSend: localStorage.getItem('claude-chat-enter-send') !== 'false',
   notifications: localStorage.getItem('claude-chat-notifications') !== 'false',
   fontSize: parseInt(localStorage.getItem('claude-chat-font-size') || '14'),
-  doneChime: localStorage.getItem('claude-chat-done-chime') !== 'false', // on by default
 };
-
-// === Completion chime (Web Audio API) ===
-let audioCtx = null;
-function playDoneChime() {
-  if (!settings.doneChime) return;
-  try {
-    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const now = audioCtx.currentTime;
-    // Two-tone chime: C5 → E5
-    [523.25, 659.25].forEach((freq, i) => {
-      const osc = audioCtx.createOscillator();
-      const gain = audioCtx.createGain();
-      osc.type = 'sine';
-      osc.frequency.value = freq;
-      gain.gain.setValueAtTime(0.15, now + i * 0.12);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.12 + 0.3);
-      osc.connect(gain);
-      gain.connect(audioCtx.destination);
-      osc.start(now + i * 0.12);
-      osc.stop(now + i * 0.12 + 0.35);
-    });
-  } catch (e) { /* audio not available */ }
-}
 
 // === Input handling ===
 input.addEventListener('keydown', (e) => {
@@ -1110,12 +1096,25 @@ const toggleArtifacts = document.getElementById('toggle-artifacts');
 const artifacts = [];
 
 function addArtifact(content, type, fileLabel) {
-  // Deduplicate — skip if the new content is substantially similar to the last artifact
-  if (artifacts.length > 0) {
-    const last = artifacts[artifacts.length - 1];
-    // Compare normalized content (strip whitespace) to catch reformatted duplicates
-    const normalize = (s) => s.replace(/\s+/g, '').slice(0, 500);
-    if (last.type === type && normalize(last.content) === normalize(content)) return;
+  if (!content || !content.trim()) return;
+  // Deduplicate — skip if the new content is substantially similar to an existing artifact
+  const normalize = (s) => s.replace(/\s+/g, '');
+  const newNorm = normalize(content);
+  for (let i = artifacts.length - 1; i >= Math.max(0, artifacts.length - 5); i--) {
+    const a = artifacts[i];
+    if (a.type !== type) continue;
+    const existNorm = normalize(a.content);
+    // Exact match or one is a subset of the other
+    if (existNorm === newNorm) return;
+    if (newNorm.includes(existNorm) || existNorm.includes(newNorm)) {
+      // Keep the longer version — replace the existing artifact if new is bigger
+      if (newNorm.length > existNorm.length) {
+        a.content = content;
+        if (fileLabel) a.label = fileLabel;
+        renderArtifacts();
+      }
+      return;
+    }
   }
 
   const id = 'artifact-' + Date.now();
@@ -1147,7 +1146,9 @@ function renderArtifacts() {
     card.className = 'artifact-card';
     card.dataset.id = a.id;
 
-    const icon = a.type === 'html' ? '<i class="fa-solid fa-globe"></i>' : a.type === 'markdown' ? '<i class="fa-regular fa-file-lines"></i>' : '<i class="fa-solid fa-code"></i>';
+    const icon = a.type === 'html' ? '<i class="fa-solid fa-globe"></i>'
+      : a.type === 'markdown' ? '<i class="fa-regular fa-file-lines"></i>'
+      : '<i class="fa-solid fa-terminal"></i>';
     card.innerHTML = `
       <div class="artifact-card-header">
         <span class="artifact-card-icon">${icon}</span>
@@ -1393,13 +1394,32 @@ function openPreviewModal(content, type) {
     }
     if (blocks.length > 0) {
       previewRendered.innerHTML = blocks.map((b, i) =>
-        `<div style="margin-bottom:12px"><div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">${b.lang || 'code'} (block ${i + 1})</div><pre style="background:var(--bg-tertiary);padding:12px;border-radius:6px;overflow-x:auto;"><code>${escapeHtml(b.code)}</code></pre></div>`
+        `<div style="margin-bottom:12px"><div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">${b.lang || 'code'} (block ${i + 1})</div><pre style="background:var(--bg-tertiary);padding:12px;border-radius:6px;overflow-x:auto;font-size:13px;line-height:1.5;"><code>${escapeHtml(b.code)}</code></pre></div>`
       ).join('');
       previewSourceCode.textContent = blocks.map(b => b.code).join('\n\n');
       previewRawContent = blocks.map(b => b.code).join('\n\n');
     } else {
-      previewRendered.innerHTML = `<pre>${escapeHtml(content)}</pre>`;
-      previewSourceCode.textContent = content;
+      // Clean up terminal artifacts: strip line numbers, common indentation, blank lines
+      let cleaned = content
+        .split('\n')
+        .map(line => {
+          // Strip leading line numbers (e.g. "  42  code here" or "  42\tcode here")
+          const numStrip = line.match(/^\s*\d+[\t ]{1,4}(.*)$/);
+          return numStrip ? numStrip[1] : line;
+        })
+        .join('\n');
+      // Remove common leading whitespace
+      const nonEmpty = cleaned.split('\n').filter(l => l.trim());
+      if (nonEmpty.length > 0) {
+        const minIndent = Math.min(...nonEmpty.map(l => l.match(/^(\s*)/)[1].length));
+        if (minIndent > 0) {
+          cleaned = cleaned.split('\n').map(l => l.slice(minIndent)).join('\n');
+        }
+      }
+      cleaned = cleaned.replace(/^\n+|\n+$/g, '');
+      previewRendered.innerHTML = `<pre style="background:var(--bg-tertiary);padding:12px;border-radius:6px;overflow-x:auto;font-size:13px;line-height:1.5;"><code>${escapeHtml(cleaned)}</code></pre>`;
+      previewSourceCode.textContent = cleaned;
+      previewRawContent = cleaned;
     }
   }
 
@@ -1517,7 +1537,6 @@ async function openConfig() {
   configFontLabel.textContent = settings.fontSize + 'px';
   configEnterSend.checked = settings.enterSend;
   configNotifications.checked = settings.notifications;
-  document.getElementById('config-done-chime').checked = settings.doneChime;
   configSearch.value = '';
   // Reload voices if sidebar has none yet
   if (voiceSelect.options.length <= 1 && voiceSelect.value === '') {
@@ -1556,8 +1575,6 @@ configClose.addEventListener('click', () => {
   localStorage.setItem('claude-chat-enter-send', settings.enterSend);
   settings.notifications = configNotifications.checked;
   localStorage.setItem('claude-chat-notifications', settings.notifications);
-  settings.doneChime = document.getElementById('config-done-chime').checked;
-  localStorage.setItem('claude-chat-done-chime', settings.doneChime);
   configModal.classList.add('hidden');
   showToast('Settings saved');
 });
@@ -1667,14 +1684,9 @@ const debugTests = {
     dlogPass('Terminal info retrieved');
   },
 
-  chime() {
-    playDoneChime();
-    dlogPass('Completion chime played');
-  },
-
   'run-all'() {
     dlog('--- Running all tests ---');
-    const testOrder = ['toast', 'chime', 'state', 'term-info', 'select-all', 'copy-all', 'artifact-html', 'artifact-md', 'artifact-code'];
+    const testOrder = ['toast', 'state', 'term-info', 'select-all', 'copy-all', 'artifact-html', 'artifact-md', 'artifact-code'];
     let i = 0;
     function next() {
       if (i >= testOrder.length) { dlog('--- All tests complete ---'); return; }

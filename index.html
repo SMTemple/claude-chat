@@ -93,8 +93,8 @@
     <!-- Sidebar -->
     <aside id="sidebar">
       <div style="display:flex;gap:6px;margin-bottom:4px;">
-        <button id="toggle-explorer" class="sidebar-icon-btn" title="Toggle file explorer" style="margin-left:auto;"><i class="fa-regular fa-folder"></i></button>
-        <button id="toggle-artifacts" class="sidebar-icon-btn" title="Toggle artifacts panel"><i class="fa-solid fa-cube"></i></button>
+        <button id="toggle-explorer" class="sidebar-icon-btn" title="Toggle file explorer" style="margin-left:auto;"><i class="fa-regular fa-folder-open"></i></button>
+        <button id="toggle-artifacts" class="sidebar-icon-btn" title="Toggle artifacts panel"><i class="fa-solid fa-cubes"></i></button>
       </div>
       <button id="new-chat-btn" title="New conversation (fresh session)">
         <i class="fa-solid fa-plus"></i>
@@ -184,7 +184,7 @@
     <aside id="explorer-panel" class="hidden">
       <div class="explorer-header">
         <span class="sidebar-label">FILES</span>
-        <button id="explorer-up" class="sidebar-icon-btn" title="Go up"><i class="fa-solid fa-level-up-alt"></i></button>
+        <button id="explorer-up" class="sidebar-icon-btn" title="Go up"><i class="fa-solid fa-arrow-up"></i></button>
         <button id="explorer-refresh" class="sidebar-icon-btn" title="Refresh"><i class="fa-solid fa-arrows-rotate"></i></button>
         <button id="explorer-close" class="sidebar-icon-btn" title="Close"><i class="fa-solid fa-xmark"></i></button>
       </div>
@@ -257,16 +257,6 @@
             <span class="toggle-slider"></span>
           </label>
         </div>
-        <div class="config-section">
-          <label class="config-label">Completion Chime</label>
-          <div class="config-row">
-            <label class="toggle-switch">
-              <input type="checkbox" id="config-done-chime" checked>
-              <span class="toggle-slider"></span>
-            </label>
-            <span class="config-hint">Play a sound + toast when Claude finishes responding</span>
-          </div>
-        </div>
       </div>
       <div class="modal-actions">
         <button id="config-close" class="modal-btn primary">Done</button>
@@ -314,7 +304,6 @@
       <div id="debug-log" style="background:var(--bg-primary);border:1px solid var(--border);border-radius:6px;padding:10px;font-family:var(--font-mono);font-size:11px;max-height:300px;overflow-y:auto;color:var(--text-secondary);white-space:pre-wrap;"></div>
       <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;">
         <button class="modal-btn debug-action" data-test="toast">Toast</button>
-        <button class="modal-btn debug-action" data-test="chime">Chime</button>
         <button class="modal-btn debug-action" data-test="artifact-html">HTML Artifact</button>
         <button class="modal-btn debug-action" data-test="artifact-md">Markdown Artifact</button>
         <button class="modal-btn debug-action" data-test="artifact-code">Code Artifact</button>
