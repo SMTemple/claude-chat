@@ -401,6 +401,19 @@ kbd {
 .preview-body pre code { font-family: inherit; font-size: inherit; }
 .preview-body iframe { width: 100%; height: 100%; min-height: 300px; border: none; background: white; border-radius: 4px; }
 
+/* === Code Copy Button === */
+.code-block-wrapper { position: relative; }
+.code-copy-btn {
+  position: absolute; top: 6px; right: 6px; z-index: 2;
+  background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12);
+  color: var(--text-secondary); font-size: 11px; font-family: var(--font-sans);
+  padding: 3px 10px; border-radius: 4px; cursor: pointer;
+  opacity: 0; transition: opacity 0.15s, background 0.15s;
+  display: flex; align-items: center; gap: 4px;
+}
+.code-block-wrapper:hover .code-copy-btn { opacity: 1; }
+.code-copy-btn:hover { background: rgba(255,255,255,0.15); color: var(--text-primary); }
+
 /* === Config Panel === */
 .config-panel { max-width: 520px; max-height: 80vh; overflow-y: auto; }
 .config-tabs { display: flex; gap: 0; margin-bottom: 12px; border-bottom: 1px solid var(--border); }

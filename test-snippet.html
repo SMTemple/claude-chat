@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Snippet Render Test</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+      color: #e0e0e0;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+    }
+    .card {
+      background: rgba(255,255,255,0.05);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 16px;
+      padding: 40px;
+      text-align: center;
+      max-width: 400px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+    }
+    .card h1 {
+      font-size: 24px;
+      margin-bottom: 12px;
+      background: linear-gradient(90deg, #e94560, #533483);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .card p { font-size: 14px; opacity: 0.8; margin-bottom: 20px; }
+    .badge {
+      display: inline-block;
+      background: #e94560;
+      color: white;
+      padding: 6px 16px;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 600;
+      animation: pulse 2s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.05); box-shadow: 0 0 20px rgba(233,69,96,0.4); }
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Snippet Rendering Works!</h1>
+    <p>If you can see this card in the artifacts panel, the code preview pipeline is functioning correctly.</p>
+    <span class="badge">Render OK</span>
+  </div>
+</body>
+</html>

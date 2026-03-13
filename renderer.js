@@ -188,6 +188,7 @@ function initTerminal() {
     }
     // Ctrl+Shift+V or Ctrl+V → paste from clipboard
     if (e.ctrlKey && (e.key === 'v' || e.key === 'V') && e.type === 'keydown') {
+      e.preventDefault();
       navigator.clipboard.readText().then(text => {
         if (text) window.api.ptyInput(text);
       });
@@ -552,7 +553,13 @@ function renderMarkdownToHtml(md) {
   const codeBlocks = [];
   let html = md.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
     const idx = codeBlocks.length;
-    codeBlocks.push(`<pre style="background:#1a1a28;padding:12px;border-radius:6px;overflow-x:auto;margin:8px 0;font-family:var(--font-mono);font-size:12px;"><code>${escapeHtml(code.trim())}</code></pre>`);
+    const escaped = escapeHtml(code.trim());
+    codeBlocks.push(
+      `<div class="code-block-wrapper" style="position:relative;margin:8px 0;">` +
+      `<button class="code-copy-btn" title="Copy code" onclick="(function(btn){const code=btn.closest('.code-block-wrapper').querySelector('code').textContent;navigator.clipboard.writeText(code);btn.innerHTML='<i class=\\'fa-solid fa-check\\'></i> Copied';setTimeout(()=>{btn.innerHTML='<i class=\\'fa-regular fa-copy\\'></i> Copy'},1500)})(this)"><i class="fa-regular fa-copy"></i> Copy</button>` +
+      `<pre style="background:#1a1a28;padding:12px;border-radius:6px;overflow-x:auto;font-family:var(--font-mono);font-size:12px;"><code>${escaped}</code></pre>` +
+      `</div>`
+    );
     return `\x00CB${idx}\x00`;
   });
   // Protect inline code
@@ -1394,7 +1401,7 @@ function openPreviewModal(content, type) {
     }
     if (blocks.length > 0) {
       previewRendered.innerHTML = blocks.map((b, i) =>
-        `<div style="margin-bottom:12px"><div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">${b.lang || 'code'} (block ${i + 1})</div><pre style="background:var(--bg-tertiary);padding:12px;border-radius:6px;overflow-x:auto;font-size:13px;line-height:1.5;"><code>${escapeHtml(b.code)}</code></pre></div>`
+        `<div class="code-block-wrapper" style="position:relative;margin-bottom:12px"><div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">${b.lang || 'code'} (block ${i + 1})</div><button class="code-copy-btn" title="Copy code" onclick="(function(btn){const code=btn.closest('.code-block-wrapper').querySelector('code').textContent;navigator.clipboard.writeText(code);btn.innerHTML='<i class=\\'fa-solid fa-check\\'></i> Copied';setTimeout(()=>{btn.innerHTML='<i class=\\'fa-regular fa-copy\\'></i> Copy'},1500)})(this)"><i class="fa-regular fa-copy"></i> Copy</button><pre style="background:var(--bg-tertiary);padding:12px;border-radius:6px;overflow-x:auto;font-size:13px;line-height:1.5;"><code>${escapeHtml(b.code)}</code></pre></div>`
       ).join('');
       previewSourceCode.textContent = blocks.map(b => b.code).join('\n\n');
       previewRawContent = blocks.map(b => b.code).join('\n\n');
