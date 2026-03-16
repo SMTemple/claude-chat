@@ -1,3 +1,6 @@
+// === Syntax Highlighting ===
+const hljs = require('highlight.js');
+
 // === Setup Wizard ===
 (async () => {
   const setup = await window.api.checkSetup();
@@ -191,12 +194,12 @@ function initTerminal() {
       e.preventDefault();
       navigator.clipboard.readText().then(text => {
         if (!text) return;
-        window.api.ptyInput(text);
-        // Multi-line paste triggers Claude Code's paste detection ("[Pasted text #1]")
-        // which requires Enter to accept, then another Enter to submit
-        if (text.includes('\n') || text.includes('\r')) {
-          setTimeout(() => window.api.ptyInput('\r'), 100);
-          setTimeout(() => window.api.ptyInput('\r'), 300);
+        // Use paste-aware submit for multi-line or long text that may trigger
+        // Claude Code's paste detection; for short single-line text, send directly
+        if (text.includes('\n') || text.includes('\r') || text.length > 200) {
+          ptyInputAndSubmit(text);
+        } else {
+          window.api.ptyInput(text);
         }
       });
       return false;
@@ -222,6 +225,9 @@ function initTerminal() {
     document.querySelectorAll('.term-context-menu').forEach(m => m.remove());
 
     if (!sel) return;
+
+    // Get unwrapped version (without terminal word-wrap breaks) for render/grab
+    const unwrapped = getUnwrappedSelection();
 
     const menu = document.createElement('div');
     menu.className = 'term-context-menu';
@@ -250,7 +256,8 @@ function initTerminal() {
     menu.appendChild(divider);
 
     // Auto-detect content type for render options
-    const trimmed = sel.trim();
+    // Use unwrapped text (no terminal word-wrap breaks) for detection and rendering
+    const trimmed = unwrapped.trim();
     const looksHtml = /<!DOCTYPE|<html|<head|<body|<div|<section|<main|<p\b|<h[1-6]\b/i.test(trimmed);
     const looksMd = /^#{1,6}\s|\*\*|^\s*[-*]\s|^\s*\d+\.\s|```/m.test(trimmed);
 
@@ -262,18 +269,18 @@ function initTerminal() {
     }
     addItem('Render as Code', '<i class="fa-solid fa-terminal"></i>', () => openPreviewModal(trimmed, 'code'));
 
-    // Also allow adding to artifacts panel
+    // Divider before quick-grab options
     const divider2 = document.createElement('div');
     divider2.style.cssText = 'height:1px;background:var(--border);margin:4px 0;';
     menu.appendChild(divider2);
 
-    if (looksHtml) {
-      addItem('Add as HTML Artifact', '<i class="fa-solid fa-cube"></i>', () => { addArtifact(trimmed, 'html', 'Selection'); showToast('HTML artifact added'); });
-    }
-    if (looksMd) {
-      addItem('Add as Markdown Artifact', '<i class="fa-solid fa-cube"></i>', () => { addArtifact(trimmed, 'markdown', 'Selection'); showToast('Markdown artifact added'); });
-    }
-    addItem('Add as Code Artifact', '<i class="fa-solid fa-cube"></i>', () => { addArtifact(trimmed, 'code', 'Selection'); showToast('Code artifact added'); });
+    // Quick Grab — opens preview + saves to artifacts in one click
+    addItem('Grab Code', '<i class="fa-solid fa-wand-magic-sparkles"></i>', () => {
+      const type = looksHtml ? 'html' : looksMd ? 'markdown' : 'code';
+      openPreviewModal(trimmed, type);
+      addArtifact(trimmed, type, 'Selection');
+      showToast('Saved to artifacts');
+    });
 
     document.body.appendChild(menu);
 
@@ -446,6 +453,9 @@ function initTerminal() {
   window.api.onPtyOutput((data) => {
     term.write(data);
 
+    // Check paste detection handler
+    if (_pasteOutputHandler) _pasteOutputHandler(data);
+
     if (loadingEl && !startupDone) {
       const p = stripAnsi(data);
       if (p.includes('❯') || p.includes('>  ') || p.includes('accept edits')) {
@@ -555,6 +565,38 @@ function escapeHtml(text) {
 }
 
 // Strip terminal line numbers, diff markers, and common indentation from code text
+// Get terminal selection with word-wrap line breaks removed.
+// xterm.js getSelection() inserts \n at column boundaries; this uses
+// the buffer's isWrapped flag to rejoin lines that were soft-wrapped.
+function getUnwrappedSelection() {
+  const selPos = term.getSelectionPosition();
+  if (!selPos) return term.getSelection();
+  const buf = term.buffer.active;
+  const lines = [];
+  let current = '';
+  for (let y = selPos.start.y; y <= selPos.end.y; y++) {
+    const bufLine = buf.getLine(y);
+    if (!bufLine) continue;
+    const startCol = (y === selPos.start.y) ? selPos.start.x : 0;
+    const endCol = (y === selPos.end.y) ? selPos.end.x : term.cols;
+    let lineText = '';
+    for (let x = startCol; x < endCol; x++) {
+      const cell = bufLine.getCell(x);
+      if (cell) lineText += cell.getChars() || ' ';
+    }
+    // If this line is wrapped (continuation of previous), append without newline
+    if (bufLine.isWrapped && lines.length > 0) {
+      current += lineText;
+    } else {
+      if (current || lines.length > 0) lines.push(current);
+      current = lineText;
+    }
+  }
+  lines.push(current);
+  // Trim trailing spaces from each line (terminal pads with spaces)
+  return lines.map(l => l.replace(/\s+$/, '')).join('\n');
+}
+
 function cleanTerminalCode(text) {
   let cleaned = text
     .split('\n')
@@ -588,11 +630,21 @@ function renderMarkdownToHtml(md) {
   const codeBlocks = [];
   let html = md.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
     const idx = codeBlocks.length;
-    const escaped = escapeHtml(code.trim());
+    const trimmed = code.trim();
+    let highlighted;
+    try {
+      highlighted = lang && hljs.getLanguage(lang)
+        ? hljs.highlight(trimmed, { language: lang }).value
+        : hljs.highlightAuto(trimmed).value;
+    } catch {
+      highlighted = escapeHtml(trimmed);
+    }
+    const langLabel = lang || 'code';
     codeBlocks.push(
-      `<div class="code-block-wrapper" style="position:relative;margin:8px 0;">` +
-      `<button class="code-copy-btn" title="Copy code" onclick="(function(btn){const code=btn.closest('.code-block-wrapper').querySelector('code').textContent;navigator.clipboard.writeText(code);btn.innerHTML='<i class=\\'fa-solid fa-check\\'></i> Copied';setTimeout(()=>{btn.innerHTML='<i class=\\'fa-regular fa-copy\\'></i> Copy'},1500)})(this)"><i class="fa-regular fa-copy"></i> Copy</button>` +
-      `<pre style="background:#1a1a28;padding:12px;border-radius:6px;overflow-x:auto;font-family:var(--font-mono);font-size:12px;"><code>${escaped}</code></pre>` +
+      `<div class="code-block-wrapper">` +
+      `<div class="code-block-header"><span class="code-block-lang">${langLabel}</span>` +
+      `<button class="code-copy-btn" title="Copy code" onclick="(function(btn){const code=btn.closest('.code-block-wrapper').querySelector('code').textContent;navigator.clipboard.writeText(code);btn.innerHTML='<i class=\\'fa-solid fa-check\\'></i> Copied';setTimeout(()=>{btn.innerHTML='<i class=\\'fa-regular fa-copy\\'></i> Copy'},1500)})(this)"><i class="fa-regular fa-copy"></i> Copy</button></div>` +
+      `<pre><code class="hljs${lang ? ` language-${lang}` : ''}">${highlighted}</code></pre>` +
       `</div>`
     );
     return `\x00CB${idx}\x00`;
@@ -779,6 +831,49 @@ attachBtn.addEventListener('click', async () => {
   }
 });
 
+// === Paste-aware PTY submit ===
+// After sending text to PTY, Claude Code may detect it as a paste ("[Pasted text #N]").
+// This helper watches terminal output for the paste marker, then sends Enter to accept
+// and submit. Falls back to fixed timeouts if no paste marker appears quickly.
+let _pasteOutputHandler = null;
+function ptyInputAndSubmit(text) {
+  if (!text) return;
+  let pasteDetected = false;
+  let cleaned = false;
+
+  // Temporary hook into PTY output to detect paste marker
+  _pasteOutputHandler = (data) => {
+    if (cleaned) return;
+    const plain = stripAnsi(data);
+    if (plain.includes('[Pasted text')) {
+      pasteDetected = true;
+      cleaned = true;
+      _pasteOutputHandler = null;
+      // Paste was detected — send Enter to accept, then Enter to submit
+      setTimeout(() => window.api.ptyInput('\r'), 100);
+      setTimeout(() => window.api.ptyInput('\r'), 400);
+    }
+  };
+
+  // Send the text
+  window.api.ptyInput(text);
+
+  // Fallback: if no paste marker detected within 600ms, send Enter normally
+  setTimeout(() => {
+    if (!pasteDetected) {
+      cleaned = true;
+      _pasteOutputHandler = null;
+      window.api.ptyInput('\r');
+    }
+  }, 600);
+
+  // Safety cleanup after 2s regardless
+  setTimeout(() => {
+    cleaned = true;
+    _pasteOutputHandler = null;
+  }, 2000);
+}
+
 // === Send message from GUI input ===
 function sendFromGUI() {
   const text = input.value.trim();
@@ -800,14 +895,10 @@ function sendFromGUI() {
   const prompt = parts.join(' — ');
 
   // Write to PTY — collapse multi-line to single line for PTY compatibility,
-  // then send Enter separately so Claude Code's TUI processes correctly.
-  // Claude Code may detect bulk ptyInput as a paste ("[Pasted text #1]"),
-  // requiring a second Enter: first accepts the paste, second submits it.
+  // then use paste-aware submit that watches for Claude Code's paste detection.
   const singleLine = prompt.replace(/[\r\n]+/g, ' ').trim();
   if (singleLine) {
-    window.api.ptyInput(singleLine);
-    setTimeout(() => window.api.ptyInput('\r'), 50);
-    setTimeout(() => window.api.ptyInput('\r'), 200);
+    ptyInputAndSubmit(singleLine);
   }
 
   // Clear
@@ -1402,9 +1493,11 @@ const previewCopyRendered = document.getElementById('preview-copy-rendered');
 const previewClose = document.getElementById('preview-close');
 const previewTitle = document.getElementById('preview-title');
 let previewRawContent = '';
+let previewCurrentType = 'code';
 
 function openPreviewModal(content, type) {
   previewRawContent = content;
+  previewCurrentType = type;
 
   if (type === 'html') {
     // Extract HTML — try to get content from code fences first, fallback to raw
@@ -1435,9 +1528,15 @@ function openPreviewModal(content, type) {
       blocks.push({ lang: match[1], code: match[2].trim() });
     }
     if (blocks.length > 0) {
-      previewRendered.innerHTML = blocks.map((b, i) =>
-        `<div class="code-block-wrapper" style="position:relative;margin-bottom:12px"><div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">${b.lang || 'code'} (block ${i + 1})</div><button class="code-copy-btn" title="Copy code" onclick="(function(btn){const code=btn.closest('.code-block-wrapper').querySelector('code').textContent;navigator.clipboard.writeText(code);btn.innerHTML='<i class=\\'fa-solid fa-check\\'></i> Copied';setTimeout(()=>{btn.innerHTML='<i class=\\'fa-regular fa-copy\\'></i> Copy'},1500)})(this)"><i class="fa-regular fa-copy"></i> Copy</button><pre style="background:var(--bg-tertiary);padding:12px;border-radius:6px;overflow-x:auto;font-size:13px;line-height:1.5;"><code>${escapeHtml(b.code)}</code></pre></div>`
-      ).join('');
+      previewRendered.innerHTML = blocks.map((b, i) => {
+        let hl;
+        try {
+          hl = b.lang && hljs.getLanguage(b.lang)
+            ? hljs.highlight(b.code, { language: b.lang }).value
+            : hljs.highlightAuto(b.code).value;
+        } catch { hl = escapeHtml(b.code); }
+        return `<div class="code-block-wrapper"><div class="code-block-header"><span class="code-block-lang">${b.lang || 'code'} (block ${i + 1})</span><button class="code-copy-btn" title="Copy code" onclick="(function(btn){const code=btn.closest('.code-block-wrapper').querySelector('code').textContent;navigator.clipboard.writeText(code);btn.innerHTML='<i class=\\'fa-solid fa-check\\'></i> Copied';setTimeout(()=>{btn.innerHTML='<i class=\\'fa-regular fa-copy\\'></i> Copy'},1500)})(this)"><i class="fa-regular fa-copy"></i> Copy</button></div><pre><code class="hljs${b.lang ? ` language-${b.lang}` : ''}">${hl}</code></pre></div>`;
+      }).join('');
       previewSourceCode.textContent = blocks.map(b => b.code).join('\n\n');
       previewRawContent = blocks.map(b => b.code).join('\n\n');
     } else {
@@ -1471,6 +1570,11 @@ previewCopyRendered.addEventListener('click', () => {
   const rendered = previewRendered.innerText || previewRendered.textContent;
   navigator.clipboard.writeText(rendered);
   showToast('Rendered text copied');
+});
+
+document.getElementById('preview-save-artifact').addEventListener('click', () => {
+  addArtifact(previewRawContent, previewCurrentType, 'Selection');
+  showToast('Saved to artifacts');
 });
 
 previewClose.addEventListener('click', () => previewModal.classList.add('hidden'));
