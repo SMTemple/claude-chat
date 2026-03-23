@@ -6,6 +6,7 @@
   <title>Claude Chat</title>
   <link rel="stylesheet" href="./node_modules/@fortawesome/fontawesome-free/css/all.min.css">
   <link rel="stylesheet" href="./node_modules/@xterm/xterm/css/xterm.css">
+  <link rel="stylesheet" href="./node_modules/highlight.js/styles/tokyo-night-dark.min.css">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -155,8 +156,14 @@
     <!-- Main terminal area -->
     <main id="chat-area">
       <div id="terminal-loading">
+        <div class="startup-header">
+          <div class="startup-icon">C</div>
+          <div class="startup-info">
+            <div class="startup-title">Claude Chat</div>
+            <div class="startup-subtitle">Starting Claude Code...</div>
+          </div>
+        </div>
         <div class="loading-spinner"></div>
-        <div class="loading-text">Starting Claude Code...</div>
       </div>
       <div id="terminal-container"></div>
 
@@ -290,6 +297,7 @@
       <div id="preview-rendered" class="preview-body"></div>
       <div id="preview-source" class="preview-body" style="display:none"><pre><code id="preview-source-code"></code></pre></div>
       <div class="modal-actions">
+        <button id="preview-save-artifact" class="modal-btn"><i class="fa-solid fa-cube"></i> Save to Artifacts</button>
         <button id="preview-copy-rendered" class="modal-btn">Copy Rendered</button>
         <button id="preview-copy" class="modal-btn primary">Copy Source</button>
         <button id="preview-close" class="modal-btn">Close</button>

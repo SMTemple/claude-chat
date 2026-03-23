@@ -189,18 +189,13 @@ function initTerminal() {
       if (sel) navigator.clipboard.writeText(sel);
       return false;
     }
-    // Ctrl+Shift+V or Ctrl+V → paste from clipboard
+    // Ctrl+Shift+V or Ctrl+V → paste from clipboard into terminal
+    // Only sends text to PTY — does NOT auto-submit, so the user can review/edit
+    // before pressing Enter. Auto-submit only happens from the GUI input bar.
     if (e.ctrlKey && (e.key === 'v' || e.key === 'V') && e.type === 'keydown') {
       e.preventDefault();
       navigator.clipboard.readText().then(text => {
-        if (!text) return;
-        // Use paste-aware submit for multi-line or long text that may trigger
-        // Claude Code's paste detection; for short single-line text, send directly
-        if (text.includes('\n') || text.includes('\r') || text.length > 200) {
-          ptyInputAndSubmit(text);
-        } else {
-          window.api.ptyInput(text);
-        }
+        if (text) window.api.ptyInput(text);
       });
       return false;
     }
@@ -410,7 +405,7 @@ function initTerminal() {
     let match;
     while ((match = fenceRegex.exec(text)) !== null) {
       const lang = match[1];
-      const code = match[2].trim();
+      const code = dedentCode(match[2]);
       if (code.length < 50) continue;
       if (lang === 'html' && (code.match(/<!DOCTYPE|<html|<head|<body/i) || code.length > 200)) {
         blocks.push({ content: code, type: 'html', label: 'HTML' });
@@ -564,6 +559,18 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
+// Remove common leading whitespace from all lines (dedent), then trim edges
+function dedentCode(text) {
+  const lines = text.replace(/^\n+|\n+$/g, '').split('\n');
+  const nonEmpty = lines.filter(l => l.trim());
+  if (nonEmpty.length === 0) return '';
+  const minIndent = Math.min(...nonEmpty.map(l => l.match(/^(\s*)/)[1].length));
+  if (minIndent > 0) {
+    return lines.map(l => l.slice(minIndent)).join('\n');
+  }
+  return lines.join('\n');
+}
+
 // Strip terminal line numbers, diff markers, and common indentation from code text
 // Get terminal selection with word-wrap line breaks removed.
 // xterm.js getSelection() inserts \n at column boundaries; this uses
@@ -630,7 +637,7 @@ function renderMarkdownToHtml(md) {
   const codeBlocks = [];
   let html = md.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
     const idx = codeBlocks.length;
-    const trimmed = code.trim();
+    const trimmed = dedentCode(code);
     let highlighted;
     try {
       highlighted = lang && hljs.getLanguage(lang)
@@ -1525,7 +1532,7 @@ function openPreviewModal(content, type) {
     const fenceRegex = /```(\w*)\n([\s\S]*?)```/g;
     let match;
     while ((match = fenceRegex.exec(content)) !== null) {
-      blocks.push({ lang: match[1], code: match[2].trim() });
+      blocks.push({ lang: match[1], code: dedentCode(match[2]) });
     }
     if (blocks.length > 0) {
       previewRendered.innerHTML = blocks.map((b, i) => {
