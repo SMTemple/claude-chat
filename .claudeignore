@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Build/index artifacts
+.code_index/
+
+# Lock files (large, rarely need full read)
+package-lock.json
+
+# Binary/media assets
+*.ico
+*.png
+*.zip
+
+# Environment files
+.env
+
+# Scratch/temp files
+tmp/
+test-snippet.html
+
+# Non-project files
+stf-managed-it-faq-schema.html

@@ -65,7 +65,7 @@ const hljs = require('highlight.js');
       await window.api.completeSetup(wizardData);
       wizard.classList.add('hidden');
       appEl.style.display = '';
-      initTerminal();
+      createTab();
       return;
     }
     currentStep++;
@@ -98,12 +98,38 @@ if (performance.navigation?.type === 1 || performance.getEntriesByType('navigati
 
 // === State ===
 const state = {
-  pendingImages: [],
-  pendingFiles: [],
   cwd: '',
   sessionModel: 'opus',
-  claudeRunning: false,
 };
+
+// === Tab Management ===
+let tabCounter = 0;
+let activeTabId = null;
+const tabs = new Map(); // tabId -> TabContext
+
+function createTabContext(tabId) {
+  return {
+    id: tabId,
+    label: `Tab ${tabId.replace('tab-', '')}`,
+    term: null,
+    fitAddon: null,
+    containerEl: null,
+    tabEl: null,
+    claudeRunning: false,
+    userSentMessage: false,
+    pendingImages: [],
+    pendingFiles: [],
+    responseBuffer: '',
+    isResponding: false,
+    responseTimeout: null,
+    doneNotifyTimeout: null,
+    doneNotifyArmed: false,
+    startupDone: false,
+    _pasteOutputHandler: null,
+  };
+}
+
+function activeTab() { return tabs.get(activeTabId); }
 
 // === DOM refs ===
 const input = document.getElementById('input');
@@ -123,18 +149,222 @@ const { Terminal } = require('@xterm/xterm');
 const { FitAddon } = require('@xterm/addon-fit');
 const { WebLinksAddon } = require('@xterm/addon-web-links');
 
-let term;
-let fitAddon;
+// term and fitAddon are now per-tab (see tabs Map)
 
 function getTermFontSize() {
   return parseInt(localStorage.getItem('claude-chat-font-size') || '14');
 }
 
-function initTerminal() {
-  const container = document.getElementById('terminal-container');
-  if (term) { term.dispose(); }
+// === Helper functions (shared across tabs) ===
 
-  term = new Terminal({
+function stripAnsi(str) {
+  return str
+    .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')
+    .replace(/\x1b\][^\x07]*\x07/g, '')
+    .replace(/\x1b[()][A-Z0-9]/g, '')
+    .replace(/\x1b[=><!]/g, '')
+    .replace(/\x1b\[[\d;]*m/g, '')
+    .replace(/\r/g, '');
+}
+
+function cleanResponseText(raw) {
+  return stripAnsi(raw).trim()
+    .split('\n').filter(l => {
+      const t = l.trim();
+      if (!t) return false;
+      if (t.match(/^[❯>]\s*$/)) return false;
+      if (t.match(/accept edits/)) return false;
+      if (t.match(/\d+\s*tokens/)) return false;
+      if (t.match(/current:|latest:/)) return false;
+      if (t.match(/shift\+tab/i)) return false;
+      return true;
+    })
+    .join('\n')
+    .replace(/^[●⏺]\s*/, '')
+    .trim();
+}
+
+function extractWriteArtifacts(text) {
+  const results = [];
+  const lines = text.split('\n');
+  let i = 0;
+  while (i < lines.length) {
+    const t = lines[i].trim();
+    const writeMatch = t.match(/^[●⏺]\s*Write\((.+?)\)/);
+    if (!writeMatch) { i++; continue; }
+    const filePath = writeMatch[1];
+    i++;
+    while (i < lines.length) {
+      const lt = lines[i].trim();
+      if (lt.match(/^[⎿└]\s*Wrote \d+ lines/)) { i++; break; }
+      if (lt && !lt.match(/^[⎿└]/)) break;
+      i++;
+    }
+    const contentLines = [];
+    while (i < lines.length) {
+      const line = lines[i];
+      const numMatch = line.match(/^\s+(\d+)(?: (.*))?$/);
+      if (numMatch) {
+        const lineContent = numMatch[2] || '';
+        if (/^[+-]\s/.test(lineContent)) { i++; continue; }
+        contentLines.push(lineContent);
+        i++;
+      } else if (line.trim() === '' && contentLines.length > 0) {
+        let peek = i + 1;
+        while (peek < lines.length && lines[peek].trim() === '') peek++;
+        if (peek < lines.length && lines[peek].match(/^\s+(\d+)(?: (.*))?$/)) {
+          contentLines.push('');
+          i++;
+        } else {
+          break;
+        }
+      } else {
+        break;
+      }
+    }
+    if (contentLines.length < 3) continue;
+    const content = contentLines.join('\n').trim();
+    const ext = filePath.split('.').pop().toLowerCase();
+    if (ext === 'html' || ext === 'htm') {
+      results.push({ content, type: 'html', label: filePath.split(/[/\\]/).pop() });
+    } else if (ext === 'md' || ext === 'markdown') {
+      results.push({ content, type: 'markdown', label: filePath.split(/[/\\]/).pop() });
+    } else if (['js','ts','jsx','tsx','py','css','json','xml','svg','sh','rb','php','java','c','cpp','go','rs'].includes(ext)) {
+      results.push({ content, type: 'code', label: filePath.split(/[/\\]/).pop() });
+    }
+  }
+  return results;
+}
+
+function extractCodeFences(text) {
+  const blocks = [];
+  const fenceRegex = /```(\w*)\s*\n([\s\S]*?)```/g;
+  let match;
+  while ((match = fenceRegex.exec(text)) !== null) {
+    const lang = match[1];
+    const code = dedentCode(match[2]);
+    if (code.length < 50) continue;
+    if (lang === 'html' && (code.match(/<!DOCTYPE|<html|<head|<body/i) || code.length > 200)) {
+      blocks.push({ content: code, type: 'html', label: 'HTML' });
+    } else if ((lang === 'md' || lang === 'markdown') && code.length > 50) {
+      blocks.push({ content: code, type: 'markdown', label: 'Markdown' });
+    } else if (code.length > 100) {
+      blocks.push({ content: code, type: 'code', label: lang || 'Code' });
+    }
+  }
+  return blocks;
+}
+
+function flushResponseBuffer(tab) {
+  const raw = tab.responseBuffer;
+  tab.responseBuffer = '';
+  tab.isResponding = false;
+  tab.responseTimeout = null;
+  if (!raw.trim()) return;
+  const clean = cleanResponseText(raw);
+  const writeArts = extractWriteArtifacts(clean);
+  for (const a of writeArts) addArtifact(a.content, a.type, a.label);
+  const fenceArts = extractCodeFences(clean);
+  for (const a of fenceArts) addArtifact(a.content, a.type, a.label);
+}
+
+// === Global PTY listeners (registered once, route by tabId) ===
+const loadingEl = document.getElementById('terminal-loading');
+
+window.api.onPtyOutput((tabId, data) => {
+  const tab = tabs.get(tabId);
+  if (!tab) return;
+  tab.term.write(data);
+
+  // Paste detection handler
+  if (tab._pasteOutputHandler) tab._pasteOutputHandler(data);
+
+  // Loading overlay — only for the first tab
+  if (loadingEl && !tab.startupDone) {
+    const p = stripAnsi(data);
+    if (p.includes('❯') || p.includes('>  ') || p.includes('accept edits')) {
+      tab.startupDone = true;
+      if (tabId === activeTabId) {
+        loadingEl.classList.add('fade-out');
+        setTimeout(() => { loadingEl.style.display = 'none'; }, 500);
+      }
+    }
+  }
+
+  // Buffer response text for content detection
+  const plain = stripAnsi(data);
+  if (plain.includes('●') || plain.includes('⏺')) {
+    if (!tab.isResponding) {
+      tab.isResponding = true;
+      tab.responseBuffer = '';
+    }
+  }
+  if (tab.isResponding) {
+    tab.responseBuffer += plain;
+    if (tab.responseTimeout) clearTimeout(tab.responseTimeout);
+    if (plain.includes('❯')) {
+      flushResponseBuffer(tab);
+    } else {
+      tab.responseTimeout = setTimeout(() => flushResponseBuffer(tab), 3000);
+    }
+  }
+
+  // Response complete notification
+  if (tab.userSentMessage && (plain.includes('●') || plain.includes('⏺'))) {
+    tab.doneNotifyArmed = true;
+    tab.userSentMessage = false;
+  }
+  if (tab.doneNotifyArmed) {
+    if (tab.doneNotifyTimeout) clearTimeout(tab.doneNotifyTimeout);
+    tab.doneNotifyTimeout = setTimeout(() => {
+      tab.doneNotifyTimeout = null;
+      tab.doneNotifyArmed = false;
+      if (settings.notifications) {
+        window.api.notify('Claude Chat', `Response complete (${tab.label})`);
+      }
+    }, 5000);
+  }
+});
+
+window.api.onPtyExit((tabId, code) => {
+  const tab = tabs.get(tabId);
+  if (!tab) return;
+  tab.claudeRunning = false;
+  tab.term.writeln('');
+  tab.term.writeln(`\x1b[33m[Claude exited with code ${code}. Press any key or click "New Chat" to restart.]\x1b[0m`);
+  const statusEl = tab.tabEl?.querySelector('.tab-item-status');
+  if (statusEl) statusEl.classList.add('exited');
+  if (tabId === activeTabId) sessionInfo.textContent = 'Claude exited';
+});
+
+// === Resize observer (single, refits active tab) ===
+const termContainer = document.getElementById('terminal-container');
+const resizeObserver = new ResizeObserver(() => {
+  const tab = activeTab();
+  if (tab && tab.fitAddon && tab.term) {
+    tab.fitAddon.fit();
+    window.api.resizePty(tab.id, tab.term.cols, tab.term.rows);
+  }
+});
+resizeObserver.observe(termContainer);
+
+// === Tab bar event: add new tab ===
+document.getElementById('tab-add').addEventListener('click', () => createTab());
+
+// === Create a new tab ===
+function createTab() {
+  const tabId = `tab-${++tabCounter}`;
+  const tab = createTabContext(tabId);
+  tabs.set(tabId, tab);
+
+  // Create terminal container div
+  tab.containerEl = document.createElement('div');
+  tab.containerEl.className = 'tab-terminal';
+  tab.containerEl.dataset.tabId = tabId;
+  termContainer.appendChild(tab.containerEl);
+
+  // Create xterm Terminal
+  tab.term = new Terminal({
     cursorBlink: true,
     fontSize: getTermFontSize(),
     fontFamily: "'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace",
@@ -166,64 +396,68 @@ function initTerminal() {
     convertEol: true,
   });
 
-  fitAddon = new FitAddon();
-  term.loadAddon(fitAddon);
-  term.loadAddon(new WebLinksAddon((event, uri) => {
+  tab.fitAddon = new FitAddon();
+  tab.term.loadAddon(tab.fitAddon);
+  tab.term.loadAddon(new WebLinksAddon((event, uri) => {
     window.api.openExternal(uri);
   }));
 
-  term.open(container);
-  fitAddon.fit();
-
-  // Copy/paste support for terminal
-  term.attachCustomKeyEventHandler((e) => {
-    // Ctrl+Shift+A → select all terminal content
+  // Key handler for copy/paste + tab switching
+  tab.term.attachCustomKeyEventHandler((e) => {
     if (e.ctrlKey && e.shiftKey && e.key === 'A' && e.type === 'keydown') {
-      term.selectAll();
+      tab.term.selectAll();
       showToast('Terminal selected — Ctrl+C to copy');
       return false;
     }
-    // Ctrl+Shift+C → copy selection
     if (e.ctrlKey && e.shiftKey && e.key === 'C' && e.type === 'keydown') {
-      const sel = term.getSelection();
+      const sel = tab.term.getSelection();
       if (sel) navigator.clipboard.writeText(sel);
       return false;
     }
-    // Ctrl+Shift+V or Ctrl+V → paste from clipboard into terminal
-    // Only sends text to PTY — does NOT auto-submit, so the user can review/edit
-    // before pressing Enter. Auto-submit only happens from the GUI input bar.
     if (e.ctrlKey && (e.key === 'v' || e.key === 'V') && e.type === 'keydown') {
       e.preventDefault();
       navigator.clipboard.readText().then(text => {
-        if (text) window.api.ptyInput(text);
+        if (text) window.api.ptyInput(tab.id, text);
       });
       return false;
     }
-    // Ctrl+C with selection → copy (without selection, let it send SIGINT)
     if (e.ctrlKey && !e.shiftKey && e.key === 'c' && e.type === 'keydown') {
-      const sel = term.getSelection();
+      const sel = tab.term.getSelection();
       if (sel) {
         navigator.clipboard.writeText(sel);
-        term.clearSelection();
+        tab.term.clearSelection();
         return false;
       }
+    }
+    // Ctrl+Tab / Ctrl+Shift+Tab — cycle tabs
+    if (e.ctrlKey && e.key === 'Tab' && e.type === 'keydown') {
+      const ids = [...tabs.keys()];
+      const idx = ids.indexOf(activeTabId);
+      const next = ids[(idx + (e.shiftKey ? -1 : 1) + ids.length) % ids.length];
+      switchTab(next);
+      return false;
+    }
+    // Ctrl+W — close tab
+    if (e.ctrlKey && e.key === 'w' && e.type === 'keydown') {
+      closeTab(activeTabId);
+      return false;
+    }
+    // Ctrl+T — new tab
+    if (e.ctrlKey && e.key === 't' && e.type === 'keydown') {
+      createTab();
+      return false;
     }
     return true;
   });
 
-  // Right-click → context menu with copy + render options
-  container.addEventListener('contextmenu', (e) => {
+  // Right-click context menu
+  tab.containerEl.addEventListener('contextmenu', (e) => {
     e.preventDefault();
-    const sel = term.getSelection();
-
-    // Remove any existing context menu
+    const sel = tab.term.getSelection();
     document.querySelectorAll('.term-context-menu').forEach(m => m.remove());
-
     if (!sel) return;
 
-    // Get unwrapped version (without terminal word-wrap breaks) for render/grab
     const unwrapped = getUnwrappedSelection();
-
     const menu = document.createElement('div');
     menu.className = 'term-context-menu';
     menu.style.cssText = `position:fixed;top:${e.clientY}px;left:${e.clientX}px;z-index:10000;
@@ -245,31 +479,22 @@ function initTerminal() {
       showToast('Copied to clipboard');
     });
 
-    // Divider
     const divider = document.createElement('div');
     divider.style.cssText = 'height:1px;background:var(--border);margin:4px 0;';
     menu.appendChild(divider);
 
-    // Auto-detect content type for render options
-    // Use unwrapped text (no terminal word-wrap breaks) for detection and rendering
     const trimmed = unwrapped.trim();
     const looksHtml = /<!DOCTYPE|<html|<head|<body|<div|<section|<main|<p\b|<h[1-6]\b/i.test(trimmed);
     const looksMd = /^#{1,6}\s|\*\*|^\s*[-*]\s|^\s*\d+\.\s|```/m.test(trimmed);
 
-    if (looksHtml) {
-      addItem('Render as HTML', '<i class="fa-solid fa-globe"></i>', () => openPreviewModal(trimmed, 'html'));
-    }
-    if (looksMd) {
-      addItem('Render as Markdown', '<i class="fa-regular fa-file-lines"></i>', () => openPreviewModal(trimmed, 'markdown'));
-    }
+    if (looksHtml) addItem('Render as HTML', '<i class="fa-solid fa-globe"></i>', () => openPreviewModal(trimmed, 'html'));
+    if (looksMd) addItem('Render as Markdown', '<i class="fa-regular fa-file-lines"></i>', () => openPreviewModal(trimmed, 'markdown'));
     addItem('Render as Code', '<i class="fa-solid fa-terminal"></i>', () => openPreviewModal(trimmed, 'code'));
 
-    // Divider before quick-grab options
     const divider2 = document.createElement('div');
     divider2.style.cssText = 'height:1px;background:var(--border);margin:4px 0;';
     menu.appendChild(divider2);
 
-    // Quick Grab — opens preview + saves to artifacts in one click
     addItem('Grab Code', '<i class="fa-solid fa-wand-magic-sparkles"></i>', () => {
       const type = looksHtml ? 'html' : looksMd ? 'markdown' : 'code';
       openPreviewModal(trimmed, type);
@@ -278,13 +503,10 @@ function initTerminal() {
     });
 
     document.body.appendChild(menu);
-
-    // Keep menu within viewport
     const rect = menu.getBoundingClientRect();
     if (rect.right > window.innerWidth) menu.style.left = (window.innerWidth - rect.width - 8) + 'px';
     if (rect.bottom > window.innerHeight) menu.style.top = (window.innerHeight - rect.height - 8) + 'px';
 
-    // Close on click outside or Escape
     function closeMenu(ev) {
       if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('mousedown', closeMenu); }
     }
@@ -298,238 +520,114 @@ function initTerminal() {
   });
 
   // Terminal input → PTY
-  term.onData((data) => {
-    window.api.ptyInput(data);
+  tab.term.onData((data) => {
+    window.api.ptyInput(tab.id, data);
   });
 
-  // PTY output → terminal + voice readback
-  let responseBuffer = '';
-  let isResponding = false;
-  let responseTimeout = null;
-  let doneNotifyTimeout = null;
-  let doneNotifyArmed = false;
-
-  function stripAnsi(str) {
-    return str
-      .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')   // CSI sequences (including ? params)
-      .replace(/\x1b\][^\x07]*\x07/g, '')         // OSC sequences
-      .replace(/\x1b[()][A-Z0-9]/g, '')           // charset sequences
-      .replace(/\x1b[=><!]/g, '')                  // mode sequences
-      .replace(/\x1b\[[\d;]*m/g, '')              // SGR leftovers
-      .replace(/\r/g, '');                         // carriage returns
-  }
-
-  function cleanResponseText(raw) {
-    return stripAnsi(raw).trim()
-      .split('\n').filter(l => {
-        const t = l.trim();
-        if (!t) return false;
-        if (t.match(/^[❯>]\s*$/)) return false;
-        if (t.match(/accept edits/)) return false;
-        if (t.match(/\d+\s*tokens/)) return false;
-        if (t.match(/current:|latest:/)) return false;
-        if (t.match(/shift\+tab/i)) return false;
-        return true;
-      })
-      .join('\n')
-      .replace(/^[●⏺]\s*/, '')
-      .trim();
-  }
-
-  // Extract file content from Write tool output displayed in the terminal.
-  // Format: ● Write(path)\n  ⎿  Wrote N lines to path\n       1 line1\n       2 line2\n...
-  function extractWriteArtifacts(text) {
-    const artifacts = [];
-    const lines = text.split('\n');
-    let i = 0;
-    while (i < lines.length) {
-      const t = lines[i].trim();
-      // Match Write tool header
-      const writeMatch = t.match(/^[●⏺]\s*Write\((.+?)\)/);
-      if (!writeMatch) { i++; continue; }
-      const filePath = writeMatch[1];
-      i++;
-      // Skip the "Wrote N lines" status line
-      while (i < lines.length) {
-        const lt = lines[i].trim();
-        if (lt.match(/^[⎿└]\s*Wrote \d+ lines/)) { i++; break; }
-        if (lt && !lt.match(/^[⎿└]/)) break; // not part of this tool
-        i++;
-      }
-      // Collect numbered content lines (leading spaces + number + optional content)
-      // Empty lines in the file show as just "      18" (number with no trailing content)
-      // Skip diff-marker lines (+ or -) from Edit/Update tool output that may bleed in
-      const contentLines = [];
-      while (i < lines.length) {
-        const line = lines[i];
-        const numMatch = line.match(/^\s+(\d+)(?: (.*))?$/);
-        if (numMatch) {
-          const lineContent = numMatch[2] || '';
-          // Skip Edit/Update diff markers (e.g. "414 +  code" or "464 -  code")
-          if (/^[+-]\s/.test(lineContent)) { i++; continue; }
-          contentLines.push(lineContent);
-          i++;
-        } else if (line.trim() === '' && contentLines.length > 0) {
-          // Empty line — peek ahead for more numbered lines before continuing
-          let peek = i + 1;
-          while (peek < lines.length && lines[peek].trim() === '') peek++;
-          if (peek < lines.length && lines[peek].match(/^\s+(\d+)(?: (.*))?$/)) {
-            contentLines.push('');
-            i++;
-          } else {
-            break;
-          }
-        } else {
-          break;
-        }
-      }
-      if (contentLines.length < 3) continue;
-      const content = contentLines.join('\n').trim();
-      // Determine type from file extension
-      const ext = filePath.split('.').pop().toLowerCase();
-      if (ext === 'html' || ext === 'htm') {
-        artifacts.push({ content, type: 'html', label: filePath.split(/[/\\]/).pop() });
-      } else if (ext === 'md' || ext === 'markdown') {
-        artifacts.push({ content, type: 'markdown', label: filePath.split(/[/\\]/).pop() });
-      } else if (['js','ts','jsx','tsx','py','css','json','xml','svg','sh','rb','php','java','c','cpp','go','rs'].includes(ext)) {
-        artifacts.push({ content, type: 'code', label: filePath.split(/[/\\]/).pop() });
-      }
-    }
-    return artifacts;
-  }
-
-  // Extract code from markdown fences (```lang ... ```) if Claude uses them in text output
-  function extractCodeFences(text) {
-    const blocks = [];
-    const fenceRegex = /```(\w*)\s*\n([\s\S]*?)```/g;
-    let match;
-    while ((match = fenceRegex.exec(text)) !== null) {
-      const lang = match[1];
-      const code = dedentCode(match[2]);
-      if (code.length < 50) continue;
-      if (lang === 'html' && (code.match(/<!DOCTYPE|<html|<head|<body/i) || code.length > 200)) {
-        blocks.push({ content: code, type: 'html', label: 'HTML' });
-      } else if ((lang === 'md' || lang === 'markdown') && code.length > 50) {
-        blocks.push({ content: code, type: 'markdown', label: 'Markdown' });
-      } else if (code.length > 100) {
-        blocks.push({ content: code, type: 'code', label: lang || 'Code' });
-      }
-    }
-    return blocks;
-  }
-
-  function flushResponseBuffer() {
-    const raw = responseBuffer;
-    responseBuffer = '';
-    isResponding = false;
-    responseTimeout = null;
-    if (!raw.trim()) return;
-
-    const clean = cleanResponseText(raw);
-
-    // 1. Extract artifacts from Write tool output (most reliable source)
-    const writeArtifacts = extractWriteArtifacts(clean);
-    for (const a of writeArtifacts) {
-      addArtifact(a.content, a.type, a.label);
-    }
-
-    // 2. Look for code fences in response text (fallback)
-    const fenceArtifacts = extractCodeFences(clean);
-    for (const a of fenceArtifacts) {
-      addArtifact(a.content, a.type, a.label);
-    }
-
-  }
-
-  // Show loading spinner until Claude Code's prompt is ready
-  const loadingEl = document.getElementById('terminal-loading');
-  let startupDone = false;
-
-  window.api.onPtyOutput((data) => {
-    term.write(data);
-
-    // Check paste detection handler
-    if (_pasteOutputHandler) _pasteOutputHandler(data);
-
-    if (loadingEl && !startupDone) {
-      const p = stripAnsi(data);
-      if (p.includes('❯') || p.includes('>  ') || p.includes('accept edits')) {
-        startupDone = true;
-        loadingEl.classList.add('fade-out');
-        setTimeout(() => loadingEl.remove(), 500);
-      }
-    }
-
-    // Buffer response text for content detection
-    const plain = stripAnsi(data);
-    if (plain.includes('●') || plain.includes('⏺')) {
-      // Only start a new buffer if we're not already responding.
-      // A single response can contain multiple ●/⏺ markers (one per tool use),
-      // so we must NOT reset the buffer mid-response.
-      if (!isResponding) {
-        isResponding = true;
-        responseBuffer = '';
-      }
-    }
-    if (isResponding) {
-      responseBuffer += plain;
-      if (responseTimeout) clearTimeout(responseTimeout);
-      if (plain.includes('❯')) {
-        flushResponseBuffer();
-      } else {
-        // Use a longer debounce (3s) to avoid flushing mid-stream.
-        // Claude's API output often has pauses >800ms between chunks,
-        // which previously caused premature partial flushes.
-        responseTimeout = setTimeout(() => {
-          flushResponseBuffer();
-        }, 3000);
-      }
-    }
-
-    // Response complete notification: armed by GUI send, waits for response start (●/⏺),
-    // then fires once after 5s of total PTY silence.
-    if (plain.includes('●') || plain.includes('⏺')) {
-      doneNotifyArmed = true;
-    }
-    if (doneNotifyArmed) {
-      if (doneNotifyTimeout) clearTimeout(doneNotifyTimeout);
-      doneNotifyTimeout = setTimeout(() => {
-        doneNotifyTimeout = null;
-        doneNotifyArmed = false;
-        if (settings.notifications) {
-          window.api.notify('Claude Chat', 'Response complete');
-        }
-      }, 5000);
-    }
+  // Create tab bar item
+  tab.tabEl = document.createElement('div');
+  tab.tabEl.className = 'tab-item';
+  tab.tabEl.dataset.tabId = tabId;
+  tab.tabEl.innerHTML = `
+    <span class="tab-item-status"></span>
+    <span class="tab-item-label">${tab.label}</span>
+    <button class="tab-item-close" title="Close tab"><i class="fa-solid fa-xmark"></i></button>
+  `;
+  tab.tabEl.addEventListener('click', (e) => {
+    if (!e.target.closest('.tab-item-close')) switchTab(tabId);
   });
+  tab.tabEl.querySelector('.tab-item-close').addEventListener('click', () => closeTab(tabId));
+  document.getElementById('tab-list').appendChild(tab.tabEl);
 
-  // PTY exit
-  window.api.onPtyExit((code) => {
-    state.claudeRunning = false;
-    term.writeln('');
-    term.writeln(`\x1b[33m[Claude exited with code ${code}. Press any key or click "New Chat" to restart.]\x1b[0m`);
-    sessionInfo.textContent = 'Claude exited';
-  });
+  // Switch to this tab and start Claude
+  switchTab(tabId);
 
-  // Handle resize
-  const resizeObserver = new ResizeObserver(() => {
-    if (fitAddon && term) {
-      fitAddon.fit();
-      window.api.resizePty(term.cols, term.rows);
-    }
-  });
-  resizeObserver.observe(container);
+  // Open terminal in its container (must be visible for fit to work)
+  tab.term.open(tab.containerEl);
+  tab.fitAddon.fit();
 
-  // Start Claude
-  startClaude();
+  // Start Claude for this tab
+  startClaudeForTab(tabId);
+
+  return tabId;
 }
 
-async function startClaude() {
-  state.claudeRunning = true;
-  sessionInfo.textContent = 'Starting Claude...';
-  const dims = term ? { cols: term.cols, rows: term.rows } : { cols: 120, rows: 30 };
-  await window.api.startClaude(dims);
-  sessionInfo.textContent = 'Claude running';
+// === Switch active tab ===
+function switchTab(tabId) {
+  const prevTab = activeTab();
+  const newTab = tabs.get(tabId);
+  if (!newTab) return;
+
+  if (prevTab) {
+    prevTab.containerEl.classList.remove('active');
+    prevTab.tabEl.classList.remove('active');
+  }
+
+  newTab.containerEl.classList.add('active');
+  newTab.tabEl.classList.add('active');
+  activeTabId = tabId;
+
+  // Refit terminal
+  requestAnimationFrame(() => {
+    if (newTab.fitAddon && newTab.term) {
+      newTab.fitAddon.fit();
+      window.api.resizePty(tabId, newTab.term.cols, newTab.term.rows);
+    }
+  });
+
+  renderImageStrip();
+  sessionInfo.textContent = newTab.claudeRunning ? 'Claude running' : (newTab.startupDone ? 'Claude exited' : 'Starting Claude...');
+}
+
+// === Close a tab ===
+async function closeTab(tabId) {
+  const tab = tabs.get(tabId);
+  if (!tab) return;
+
+  // Last tab — restart instead of closing
+  if (tabs.size === 1) {
+    tab.term.clear();
+    const dims = { cols: tab.term.cols, rows: tab.term.rows };
+    await window.api.restartClaude({ tabId, cols: dims.cols, rows: dims.rows });
+    tab.claudeRunning = true;
+    tab.startupDone = false;
+    const statusEl = tab.tabEl?.querySelector('.tab-item-status');
+    if (statusEl) statusEl.classList.remove('exited');
+    showToast('New conversation');
+    return;
+  }
+
+  // Kill PTY
+  await window.api.closeTab(tabId);
+
+  // Clear timeouts
+  if (tab.responseTimeout) clearTimeout(tab.responseTimeout);
+  if (tab.doneNotifyTimeout) clearTimeout(tab.doneNotifyTimeout);
+
+  // Dispose xterm
+  tab.term.dispose();
+
+  // Remove DOM
+  tab.containerEl.remove();
+  tab.tabEl.remove();
+  tabs.delete(tabId);
+
+  // Switch to last remaining tab if this was active
+  if (tabId === activeTabId) {
+    const remaining = [...tabs.keys()];
+    switchTab(remaining[remaining.length - 1]);
+  }
+}
+
+// === Start Claude for a specific tab ===
+async function startClaudeForTab(tabId) {
+  const tab = tabs.get(tabId);
+  if (!tab) return;
+  tab.claudeRunning = true;
+  if (tabId === activeTabId) sessionInfo.textContent = 'Starting Claude...';
+  const dims = tab.term ? { cols: tab.term.cols, rows: tab.term.rows } : { cols: 120, rows: 30 };
+  await window.api.startClaude({ tabId, ...dims });
+  if (tabId === activeTabId) sessionInfo.textContent = 'Claude running';
 }
 
 // === Init on load (if setup already done) ===
@@ -544,7 +642,7 @@ window.api.onInitState(({ cwd, model }) => {
 // Auto-init if setup is complete
 (async () => {
   const setup = await window.api.checkSetup();
-  if (setup.setupComplete) initTerminal();
+  if (setup.setupComplete) createTab();
 })();
 
 function shortenPath(p) {
@@ -576,6 +674,9 @@ function dedentCode(text) {
 // xterm.js getSelection() inserts \n at column boundaries; this uses
 // the buffer's isWrapped flag to rejoin lines that were soft-wrapped.
 function getUnwrappedSelection() {
+  const tab = activeTab();
+  if (!tab || !tab.term) return '';
+  const term = tab.term;
   const selPos = term.getSelectionPosition();
   if (!selPos) return term.getSelection();
   const buf = term.buffer.active;
@@ -712,30 +813,37 @@ function fileIcon(name) {
 
 // === Image/File handling ===
 function addImagePreview(dataURL, filePath) {
-  state.pendingImages.push({ dataURL, path: filePath });
+  const tab = activeTab();
+  if (!tab) return;
+  tab.pendingImages.push({ dataURL, path: filePath });
   renderImageStrip();
   showToast('Image added');
 }
 
 function addFilePreview(name, filePath) {
-  state.pendingFiles.push({ name, path: filePath });
+  const tab = activeTab();
+  if (!tab) return;
+  tab.pendingFiles.push({ name, path: filePath });
   renderImageStrip();
   showToast(`File added: ${name}`);
 }
 
 function renderImageStrip() {
+  const tab = activeTab();
   imageStrip.innerHTML = '';
-  const hasItems = state.pendingImages.length > 0 || state.pendingFiles.length > 0;
+  const imgs = tab ? tab.pendingImages : [];
+  const files = tab ? tab.pendingFiles : [];
+  const hasItems = imgs.length > 0 || files.length > 0;
   imageStrip.classList.toggle('hidden', !hasItems);
 
-  state.pendingImages.forEach((img, i) => {
+  imgs.forEach((img, i) => {
     const div = document.createElement('div');
     div.className = 'image-preview';
     div.innerHTML = `<img src="${img.dataURL}"><button class="remove-img" data-type="image" data-index="${i}"><i class="fa-solid fa-xmark"></i></button>`;
     imageStrip.appendChild(div);
   });
 
-  state.pendingFiles.forEach((file, i) => {
+  files.forEach((file, i) => {
     const div = document.createElement('div');
     div.className = 'image-preview';
     div.innerHTML = `<div class="file-preview-tag"><span title="${escapeHtml(file.name)}">${fileIcon(file.name)} ${escapeHtml(file.name)}</span></div><button class="remove-img" data-type="file" data-index="${i}"><i class="fa-solid fa-xmark"></i></button>`;
@@ -744,10 +852,11 @@ function renderImageStrip() {
 
   imageStrip.querySelectorAll('.remove-img').forEach(btn => {
     btn.addEventListener('click', () => {
+      if (!tab) return;
       const type = btn.dataset.type;
       const idx = parseInt(btn.dataset.index);
-      if (type === 'image') state.pendingImages.splice(idx, 1);
-      else state.pendingFiles.splice(idx, 1);
+      if (type === 'image') tab.pendingImages.splice(idx, 1);
+      else tab.pendingFiles.splice(idx, 1);
       renderImageStrip();
     });
   });
@@ -842,54 +951,55 @@ attachBtn.addEventListener('click', async () => {
 // After sending text to PTY, Claude Code may detect it as a paste ("[Pasted text #N]").
 // This helper watches terminal output for the paste marker, then sends Enter to accept
 // and submit. Falls back to fixed timeouts if no paste marker appears quickly.
-let _pasteOutputHandler = null;
-function ptyInputAndSubmit(text) {
+function ptyInputAndSubmit(tabId, text) {
   if (!text) return;
+  const tab = tabs.get(tabId);
+  if (!tab) return;
   let pasteDetected = false;
   let cleaned = false;
 
   // Temporary hook into PTY output to detect paste marker
-  _pasteOutputHandler = (data) => {
+  tab._pasteOutputHandler = (data) => {
     if (cleaned) return;
     const plain = stripAnsi(data);
     if (plain.includes('[Pasted text')) {
       pasteDetected = true;
       cleaned = true;
-      _pasteOutputHandler = null;
-      // Paste was detected — send Enter to accept, then Enter to submit
-      setTimeout(() => window.api.ptyInput('\r'), 100);
-      setTimeout(() => window.api.ptyInput('\r'), 400);
+      tab._pasteOutputHandler = null;
+      setTimeout(() => window.api.ptyInput(tabId, '\r'), 100);
+      setTimeout(() => window.api.ptyInput(tabId, '\r'), 400);
     }
   };
 
-  // Send the text
-  window.api.ptyInput(text);
+  window.api.ptyInput(tabId, text);
 
   // Fallback: if no paste marker detected within 600ms, send Enter normally
   setTimeout(() => {
     if (!pasteDetected) {
       cleaned = true;
-      _pasteOutputHandler = null;
-      window.api.ptyInput('\r');
+      tab._pasteOutputHandler = null;
+      window.api.ptyInput(tabId, '\r');
     }
   }, 600);
 
   // Safety cleanup after 2s regardless
   setTimeout(() => {
     cleaned = true;
-    _pasteOutputHandler = null;
+    tab._pasteOutputHandler = null;
   }, 2000);
 }
 
 // === Send message from GUI input ===
 function sendFromGUI() {
+  const tab = activeTab();
+  if (!tab) return;
+
   const text = input.value.trim();
-  if (!text && state.pendingImages.length === 0 && state.pendingFiles.length === 0) return;
+  if (!text && tab.pendingImages.length === 0 && tab.pendingFiles.length === 0) return;
   if (text) pushHistory(text);
 
-  // Build prompt — must be single-line to avoid PTY newline = Enter/submit issues
-  const imagePaths = state.pendingImages.map(img => img.path).filter(Boolean);
-  const filePaths = state.pendingFiles.map(f => f.path).filter(Boolean);
+  const imagePaths = tab.pendingImages.map(img => img.path).filter(Boolean);
+  const filePaths = tab.pendingFiles.map(f => f.path).filter(Boolean);
 
   const parts = [];
   if (imagePaths.length > 0) {
@@ -901,21 +1011,17 @@ function sendFromGUI() {
   if (text) parts.push(text);
   const prompt = parts.join(' — ');
 
-  // Write to PTY — collapse multi-line to single line for PTY compatibility,
-  // then use paste-aware submit that watches for Claude Code's paste detection.
   const singleLine = prompt.replace(/[\r\n]+/g, ' ').trim();
   if (singleLine) {
-    ptyInputAndSubmit(singleLine);
+    tab.userSentMessage = true;
+    ptyInputAndSubmit(tab.id, singleLine);
   }
 
-  // Clear
   input.value = '';
   input.style.height = 'auto';
-  state.pendingImages = [];
-  state.pendingFiles = [];
+  tab.pendingImages = [];
+  tab.pendingFiles = [];
   renderImageStrip();
-
-  // Keep focus on GUI input for quick follow-ups
   input.focus();
 }
 
@@ -987,11 +1093,11 @@ sendBtn.addEventListener('click', sendFromGUI);
 modelSelect.addEventListener('change', async () => {
   state.sessionModel = modelSelect.value;
   await window.api.setModel(modelSelect.value);
-  // Restart claude with new model
-  if (term) {
-    term.clear();
-    const dims = { cols: term.cols, rows: term.rows };
-    await window.api.restartClaude(dims);
+  const tab = activeTab();
+  if (tab && tab.term) {
+    tab.term.clear();
+    const dims = { cols: tab.term.cols, rows: tab.term.rows };
+    await window.api.restartClaude({ tabId: tab.id, cols: dims.cols, rows: dims.rows });
   }
   showToast(`Restarting with model: ${modelSelect.value}`);
 });
@@ -1003,11 +1109,11 @@ cwdBtn.addEventListener('click', async () => {
     state.cwd = newCwd;
     cwdBtn.textContent = shortenPath(newCwd);
     cwdBtn.title = newCwd;
-    // Restart claude in new directory
-    if (term) {
-      term.clear();
-      const dims = { cols: term.cols, rows: term.rows };
-      await window.api.restartClaude(dims);
+    const tab = activeTab();
+    if (tab && tab.term) {
+      tab.term.clear();
+      const dims = { cols: tab.term.cols, rows: tab.term.rows };
+      await window.api.restartClaude({ tabId: tab.id, cols: dims.cols, rows: dims.rows });
     }
     showToast(`Directory: ${shortenPath(newCwd)}`);
   }
@@ -1015,11 +1121,7 @@ cwdBtn.addEventListener('click', async () => {
 
 // === New chat ===
 newChatBtn.addEventListener('click', async () => {
-  if (term) {
-    term.clear();
-    const dims = { cols: term.cols, rows: term.rows };
-    await window.api.restartClaude(dims);
-  }
+  createTab();
   artifacts.length = 0;
   renderArtifacts();
   showToast('New conversation');
@@ -1027,9 +1129,9 @@ newChatBtn.addEventListener('click', async () => {
 
 // === Export terminal ===
 exportBtn.addEventListener('click', async () => {
-  if (!term) { showToast('No terminal'); return; }
-  // Get terminal buffer content
-  const buffer = term.buffer.active;
+  const tab = activeTab();
+  if (!tab || !tab.term) { showToast('No terminal'); return; }
+  const buffer = tab.term.buffer.active;
   let text = '';
   for (let i = 0; i < buffer.length; i++) {
     const line = buffer.getLine(i);
@@ -1043,8 +1145,9 @@ exportBtn.addEventListener('click', async () => {
 // === Copy All Output ===
 const copyAllBtn = document.getElementById('copy-all-btn');
 copyAllBtn.addEventListener('click', () => {
-  if (!term) { showToast('No terminal'); return; }
-  const buffer = term.buffer.active;
+  const tab = activeTab();
+  if (!tab || !tab.term) { showToast('No terminal'); return; }
+  const buffer = tab.term.buffer.active;
   let text = '';
   for (let i = 0; i < buffer.length; i++) {
     const line = buffer.getLine(i);
@@ -1706,8 +1809,10 @@ configClose.addEventListener('click', () => {
   }
   settings.fontSize = parseInt(configFontSize.value);
   localStorage.setItem('claude-chat-font-size', settings.fontSize);
-  if (term) term.options.fontSize = settings.fontSize;
-  if (fitAddon) fitAddon.fit();
+  for (const [, t] of tabs) {
+    if (t.term) t.term.options.fontSize = settings.fontSize;
+    if (t.fitAddon) t.fitAddon.fit();
+  }
   settings.enterSend = configEnterSend.checked;
   localStorage.setItem('claude-chat-enter-send', settings.enterSend);
   settings.notifications = configNotifications.checked;
@@ -1782,8 +1887,9 @@ const debugTests = {
   },
 
   'copy-all'() {
-    if (!term) { dlogFail('Copy All', 'No terminal'); return; }
-    const buffer = term.buffer.active;
+    const tab = activeTab();
+    if (!tab || !tab.term) { dlogFail('Copy All', 'No terminal'); return; }
+    const buffer = tab.term.buffer.active;
     let lineCount = 0;
     for (let i = 0; i < buffer.length; i++) {
       const line = buffer.getLine(i);
@@ -1794,21 +1900,25 @@ const debugTests = {
   },
 
   'select-all'() {
-    if (!term) { dlogFail('Select All', 'No terminal'); return; }
-    term.selectAll();
-    const sel = term.getSelection();
+    const tab = activeTab();
+    if (!tab || !tab.term) { dlogFail('Select All', 'No terminal'); return; }
+    tab.term.selectAll();
+    const sel = tab.term.getSelection();
     dlog(`Selected ${sel.length} chars`);
-    term.clearSelection();
+    tab.term.clearSelection();
     dlogPass('Select All works');
   },
 
   state() {
+    const tab = activeTab();
     dlog(`State: ${JSON.stringify({
       cwd: state.cwd,
       model: state.sessionModel,
-      running: state.claudeRunning,
-      pendingImages: state.pendingImages.length,
-      pendingFiles: state.pendingFiles.length,
+      activeTab: activeTabId,
+      totalTabs: tabs.size,
+      running: tab ? tab.claudeRunning : false,
+      pendingImages: tab ? tab.pendingImages.length : 0,
+      pendingFiles: tab ? tab.pendingFiles.length : 0,
       artifacts: artifacts.length,
       settings: { enterSend: settings.enterSend, fontSize: settings.fontSize, notifications: settings.notifications },
     }, null, 2)}`);
@@ -1816,8 +1926,9 @@ const debugTests = {
   },
 
   'term-info'() {
-    if (!term) { dlogFail('Terminal Info', 'No terminal'); return; }
-    dlog(`Terminal: cols=${term.cols} rows=${term.rows} bufLen=${term.buffer.active.length} fontSize=${term.options.fontSize}`);
+    const tab = activeTab();
+    if (!tab || !tab.term) { dlogFail('Terminal Info', 'No terminal'); return; }
+    dlog(`Terminal: cols=${tab.term.cols} rows=${tab.term.rows} bufLen=${tab.term.buffer.active.length} fontSize=${tab.term.options.fontSize} tab=${tab.id}`);
     dlogPass('Terminal info retrieved');
   },
 

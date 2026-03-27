@@ -8,7 +8,7 @@ const TEMP_DIR = path.join(__dirname, 'tmp');
 if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 
 let mainWindow;
-let ptyProcess = null;
+const ptyProcesses = new Map(); // tabId -> ptyProcess
 let currentModel = 'opus';
 try {
   const claudeConfig = path.join(os.homedir(), '.claude', 'settings.local.json');
@@ -90,8 +90,8 @@ function createWindow() {
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (input.control && input.key === 'r') {
       event.preventDefault();
-      // Gracefully exit Claude so it saves session state (for --continue)
-      gracefulStopPty().then(() => {
+      // Gracefully exit all Claude sessions so they save state (for --continue)
+      gracefulStopAllPtys().then(() => {
         mainWindow.webContents.reloadIgnoringCache();
       });
     }
@@ -116,23 +116,25 @@ if (!gotLock) {
   app.whenReady().then(createWindow);
 }
 app.on('window-all-closed', () => {
-  if (ptyProcess) { try { ptyProcess.kill(); } catch (e) {} }
+  for (const [, proc] of ptyProcesses) {
+    try { proc.kill(); } catch (e) {}
+  }
+  ptyProcesses.clear();
   app.quit();
 });
 
 // === PTY Management ===
 
-// Gracefully stop the current PTY by sending /exit, with force-kill fallback
-function gracefulStopPty() {
+// Gracefully stop a PTY by tabId — sends /exit, with force-kill fallback
+function gracefulStopPty(tabId) {
   return new Promise((resolve) => {
-    if (!ptyProcess) return resolve();
-    const p = ptyProcess;
-    ptyProcess = null;
+    const p = ptyProcesses.get(tabId);
+    if (!p) return resolve();
+    ptyProcesses.delete(tabId);
     let done = false;
     const finish = () => { if (!done) { done = true; resolve(); } };
     p.onExit(() => finish());
     try { p.write('/exit\r'); } catch (e) {}
-    // Fallback: force kill after 2s if /exit didn't work
     setTimeout(() => {
       if (!done) { try { p.kill(); } catch (e) {} }
       finish();
@@ -140,13 +142,20 @@ function gracefulStopPty() {
   });
 }
 
-function doSpawnClaude(cols, rows) {
+// Gracefully stop all PTYs (used on reload/quit)
+function gracefulStopAllPtys() {
+  const promises = [];
+  for (const tabId of ptyProcesses.keys()) {
+    promises.push(gracefulStopPty(tabId));
+  }
+  return Promise.all(promises);
+}
+
+function doSpawnClaude(tabId, cols, rows) {
   const env = { ...process.env };
-  // Remove all Claude Code env vars so the spawned instance runs fresh
   delete env.CLAUDECODE;
   delete env.CLAUDE_CODE_ENTRYPOINT;
   delete env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS;
-  // Also remove any other CLAUDE_ vars that might leak from parent session
   for (const key of Object.keys(env)) {
     if (key.startsWith('CLAUDE_') && key !== 'CLAUDE_API_KEY') delete env[key];
   }
@@ -165,9 +174,9 @@ function doSpawnClaude(cols, rows) {
   }
 
   const args = ['--model', currentModel];
-  console.log('[PTY] Spawning claude with args:', args.join(' '), '| cwd:', currentCwd);
+  console.log(`[PTY:${tabId}] Spawning claude with args:`, args.join(' '), '| cwd:', currentCwd);
 
-  ptyProcess = pty.spawn(claudeExe, args, {
+  const proc = pty.spawn(claudeExe, args, {
     name: 'xterm-256color',
     cols: cols || 120,
     rows: rows || 30,
@@ -175,48 +184,53 @@ function doSpawnClaude(cols, rows) {
     env,
   });
 
-  ptyProcess.onData((data) => {
+  ptyProcesses.set(tabId, proc);
+
+  proc.onData((data) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('pty-output', data);
+      mainWindow.webContents.send('pty-output', tabId, data);
     }
   });
 
-  const thisProcess = ptyProcess;
-  ptyProcess.onExit(({ exitCode }) => {
-    if (ptyProcess === thisProcess) {
-      ptyProcess = null;
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('pty-exit', exitCode);
-      }
+  proc.onExit(({ exitCode }) => {
+    ptyProcesses.delete(tabId);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('pty-exit', tabId, exitCode);
     }
   });
 }
 
-// Gracefully stop old PTY, then spawn new one
-async function spawnClaude(cols, rows) {
-  await gracefulStopPty();
-  doSpawnClaude(cols, rows);
+async function spawnClaude(tabId, cols, rows) {
+  await gracefulStopPty(tabId);
+  doSpawnClaude(tabId, cols, rows);
 }
 
-ipcMain.handle('start-claude', async (_event, { cols, rows }) => {
-  await spawnClaude(cols, rows);
+ipcMain.handle('start-claude', async (_event, { tabId, cols, rows }) => {
+  await spawnClaude(tabId, cols, rows);
   return true;
 });
 
-ipcMain.handle('pty-input', (_event, data) => {
-  if (ptyProcess) ptyProcess.write(data);
+ipcMain.handle('pty-input', (_event, { tabId, data }) => {
+  const proc = ptyProcesses.get(tabId);
+  if (proc) proc.write(data);
   return true;
 });
 
-ipcMain.handle('resize-pty', (_event, { cols, rows }) => {
-  if (ptyProcess) {
-    try { ptyProcess.resize(cols, rows); } catch (e) {}
+ipcMain.handle('resize-pty', (_event, { tabId, cols, rows }) => {
+  const proc = ptyProcesses.get(tabId);
+  if (proc) {
+    try { proc.resize(cols, rows); } catch (e) {}
   }
   return true;
 });
 
-ipcMain.handle('restart-claude', async (_event, { cols, rows }) => {
-  await spawnClaude(cols, rows);
+ipcMain.handle('restart-claude', async (_event, { tabId, cols, rows }) => {
+  await spawnClaude(tabId, cols, rows);
+  return true;
+});
+
+ipcMain.handle('close-tab', async (_event, { tabId }) => {
+  await gracefulStopPty(tabId);
   return true;
 });
 

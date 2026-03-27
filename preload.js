@@ -7,13 +7,14 @@ ipcRenderer.removeAllListeners('pty-exit');
 ipcRenderer.removeAllListeners('init-state');
 
 window.api = {
-  // PTY
-  startClaude: (opts) => ipcRenderer.invoke('start-claude', opts),
-  ptyInput: (data) => ipcRenderer.invoke('pty-input', data),
-  resizePty: (cols, rows) => ipcRenderer.invoke('resize-pty', { cols, rows }),
-  restartClaude: (opts) => ipcRenderer.invoke('restart-claude', opts),  // opts: { cols, rows }
-  onPtyOutput: (cb) => ipcRenderer.on('pty-output', (_e, data) => cb(data)),
-  onPtyExit: (cb) => ipcRenderer.on('pty-exit', (_e, code) => cb(code)),
+  // PTY (all calls include tabId for multi-tab routing)
+  startClaude: (opts) => ipcRenderer.invoke('start-claude', opts),  // { tabId, cols, rows }
+  ptyInput: (tabId, data) => ipcRenderer.invoke('pty-input', { tabId, data }),
+  resizePty: (tabId, cols, rows) => ipcRenderer.invoke('resize-pty', { tabId, cols, rows }),
+  restartClaude: (opts) => ipcRenderer.invoke('restart-claude', opts),  // { tabId, cols, rows }
+  closeTab: (tabId) => ipcRenderer.invoke('close-tab', { tabId }),
+  onPtyOutput: (cb) => ipcRenderer.on('pty-output', (_e, tabId, data) => cb(tabId, data)),
+  onPtyExit: (cb) => ipcRenderer.on('pty-exit', (_e, tabId, code) => cb(tabId, code)),
 
   // Files & images
   saveImage: (dataURL) => ipcRenderer.invoke('save-image', dataURL),
