@@ -489,6 +489,7 @@ function createTab() {
 
     if (looksHtml) addItem('Render as HTML', '<i class="fa-solid fa-globe"></i>', () => openPreviewModal(trimmed, 'html'));
     if (looksMd) addItem('Render as Markdown', '<i class="fa-regular fa-file-lines"></i>', () => openPreviewModal(trimmed, 'markdown'));
+    addItem('Render as Text', '<i class="fa-solid fa-align-left"></i>', () => openPreviewModal(trimmed, 'text'));
     addItem('Render as Code', '<i class="fa-solid fa-terminal"></i>', () => openPreviewModal(trimmed, 'code'));
 
     const divider2 = document.createElement('div');
@@ -1626,6 +1627,14 @@ function openPreviewModal(content, type) {
   } else if (type === 'markdown') {
     previewTitle.textContent = 'Markdown Preview';
     previewRendered.innerHTML = `<div style="line-height:1.6;font-size:14px;color:var(--text-primary);">${renderMarkdownToHtml(content)}</div>`;
+    previewSourceCode.textContent = content;
+    previewRawContent = content;
+  } else if (type === 'text') {
+    previewTitle.textContent = 'Content Preview';
+    // Normalize whitespace: collapse runs of spaces, split on double-newlines for paragraphs
+    const normalized = content.replace(/[ \t]+/g, ' ');
+    const paragraphs = normalized.split(/\n\n+/).map(p => p.replace(/\n/g, ' ').trim()).filter(Boolean);
+    previewRendered.innerHTML = `<div style="line-height:1.6;font-size:14px;color:var(--text-primary);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">${paragraphs.map(p => `<p style="margin:8px 0;">${escapeHtml(p)}</p>`).join('')}</div>`;
     previewSourceCode.textContent = content;
     previewRawContent = content;
   } else {
