@@ -7,3 +7,14 @@ Thumbs.db
 .claude/
 tmp/
 test/
+
+# Secrets
+.env
+.env.*
+
+# Local scratch / experimental scripts
+New Text Document*.txt
+move_steam.ps1
+mu-patch-remote.js
+patch-remote.js
+ssh-cmd.js
