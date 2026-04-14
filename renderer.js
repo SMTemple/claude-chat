@@ -417,7 +417,13 @@ function createTab() {
     if (e.ctrlKey && (e.key === 'v' || e.key === 'V') && e.type === 'keydown') {
       e.preventDefault();
       navigator.clipboard.readText().then(text => {
-        if (text) window.api.ptyInput(tab.id, text);
+        if (!text) return;
+        // Wrap multi-line pastes in bracketed-paste escape sequences so Claude Code
+        // treats embedded newlines as content rather than submit-Enters.
+        const payload = /\r|\n/.test(text)
+          ? `\x1b[200~${text.replace(/\r\n/g, '\n')}\x1b[201~`
+          : text;
+        window.api.ptyInput(tab.id, payload);
       });
       return false;
     }
@@ -1012,10 +1018,15 @@ function sendFromGUI() {
   if (text) parts.push(text);
   const prompt = parts.join(' — ');
 
-  const singleLine = prompt.replace(/[\r\n]+/g, ' ').trim();
-  if (singleLine) {
+  const normalized = prompt.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  if (normalized.trim()) {
     tab.userSentMessage = true;
-    ptyInputAndSubmit(tab.id, singleLine);
+    // Multi-line content must be bracketed so Claude Code accepts it as a paste
+    // instead of submitting on the first newline.
+    const payload = /\n/.test(normalized)
+      ? `\x1b[200~${normalized}\x1b[201~`
+      : normalized;
+    ptyInputAndSubmit(tab.id, payload);
   }
 
   input.value = '';
